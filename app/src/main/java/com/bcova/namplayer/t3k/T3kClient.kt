@@ -64,6 +64,12 @@ class T3kClient(private val tokens: TokenStore) {
 
     suspend fun tone(id: String): Tone = get("/api/v1/tones/$id")
 
+    /** Favorite or unfavorite a tone for the signed-in user. Both calls are safe to repeat. */
+    suspend fun setFavorite(toneId: String, favorite: Boolean) {
+        if (!T3kConfig.IN_APP_FAVORITES) throw T3kException("In-app favorites are turned off in this build.")
+        send(if (favorite) "PUT" else "DELETE", "/api/v1/tones/$toneId/favorite")
+    }
+
     // ---- Full-catalog search (approved for this app by TONE3000 by email, Nov 2026; see README).
 
     suspend fun search(filters: SearchFilters, page: Int): Paginated<Tone> {
@@ -125,6 +131,21 @@ class T3kClient(private val tokens: TokenStore) {
             }
             checkStatus(conn)
             decode<T>(conn.inputStream.bufferedReader().use { it.readText() })
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /** A request whose response body we don't need (e.g. PUT/DELETE). */
+    private suspend fun send(method: String, path: String) = withContext(Dispatchers.IO) {
+        var conn = open(T3kConfig.BASE_URL + path, authorized = true).apply { requestMethod = method }
+        try {
+            if (conn.responseCode == 401) {
+                conn.disconnect()
+                refresh(force = true)
+                conn = open(T3kConfig.BASE_URL + path, authorized = true).apply { requestMethod = method }
+            }
+            checkStatus(conn)
         } finally {
             conn.disconnect()
         }

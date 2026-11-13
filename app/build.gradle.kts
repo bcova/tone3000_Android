@@ -25,6 +25,9 @@ android {
         // In-app full catalog search: see gradle.properties before sharing the app.
         val fullSearch = (project.findProperty("t3kFullCatalogSearch") as String?).toBoolean()
         buildConfigField("boolean", "T3K_FULL_CATALOG_SEARCH", fullSearch.toString())
+        // In-app favorite/unfavorite: see gradle.properties before sharing the app.
+        val inAppFavorites = (project.findProperty("t3kInAppFavorites") as String?).toBoolean()
+        buildConfigField("boolean", "T3K_IN_APP_FAVORITES", inAppFavorites.toString())
 
         ndk {
             // arm64 = real phones; x86_64 = the Android Studio emulator.

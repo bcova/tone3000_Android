@@ -22,6 +22,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
@@ -68,10 +69,17 @@ import kotlin.math.roundToInt
  * Each block is where you add or change a tone (TONE3000 design rule 1: the entry point).
  */
 @Composable
-fun PlayerScreen(vm: AmpViewModel, onBrowse: (BlockTarget) -> Unit, signedIn: Boolean, onSignOut: () -> Unit) {
+fun PlayerScreen(
+    vm: AmpViewModel,
+    onBrowse: (BlockTarget) -> Unit,
+    onTuner: () -> Unit,
+    signedIn: Boolean,
+    onSignOut: () -> Unit,
+) {
     val context = LocalContext.current
     var showAddSheet by remember { mutableStateOf(false) }
     var showAbout by remember { mutableStateOf(false) }
+    var showPresets by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) vm.toggleAudio()
@@ -96,6 +104,32 @@ fun PlayerScreen(vm: AmpViewModel, onBrowse: (BlockTarget) -> Unit, signedIn: Bo
             Text("Ampfield", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
             TextButton(onClick = { showAbout = true }) { Text("About") }
             if (signedIn) TextButton(onClick = onSignOut) { Text("Sign out") }
+        }
+
+        // Presets + tuner
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            val preset = vm.currentPreset
+            OutlinedButton(onClick = { showPresets = true }, modifier = Modifier.weight(1f).height(48.dp)) {
+                Icon(Icons.AutoMirrored.Filled.List, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    when {
+                        preset == null -> "Presets"
+                        vm.presetModified -> "${preset.name} *"
+                        else -> preset.name
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            OutlinedButton(onClick = onTuner, modifier = Modifier.height(48.dp)) { Text("Tuner") }
+        }
+        if (vm.restoring) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp))
+                Text("Loading your last setup…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
 
         Button(
@@ -201,6 +235,7 @@ fun PlayerScreen(vm: AmpViewModel, onBrowse: (BlockTarget) -> Unit, signedIn: Bo
     }
 
     if (showAbout) AboutDialog(onDismiss = { showAbout = false })
+    if (showPresets) PresetsSheet(vm, onDismiss = { showPresets = false })
 
     if (showAddSheet) {
         AddBlockSheet(

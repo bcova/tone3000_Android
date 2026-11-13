@@ -195,7 +195,11 @@ fun LibraryScreen(target: BlockTarget, vm: T3kViewModel) {
             }
             LazyColumn(state = listState, modifier = Modifier.weight(1f), contentPadding = PaddingValues(vertical = 4.dp)) {
                 items(vm.tones, key = { it.id }) { tone ->
-                    ToneRow(tone) { vm.openTone(tone, target) }
+                    ToneRow(
+                    tone,
+                    favorite = if (T3kConfig.IN_APP_FAVORITES) vm.isFavorite(tone) else null,
+                    onFavorite = { vm.toggleFavorite(tone) },
+                ) { vm.openTone(tone, target) }
                     HorizontalDivider(Modifier.padding(start = 92.dp), color = MaterialTheme.colorScheme.surfaceVariant)
                 }
                 if (vm.listLoading) {
@@ -302,7 +306,10 @@ fun ToneDetailScreen(vm: T3kViewModel, onInstall: () -> Unit) {
                 if (tone == null) {
                     if (state.loading) Box(Modifier.fillMaxWidth().padding(24.dp), Alignment.Center) { CircularProgressIndicator() }
                 } else {
-                    Text(tone.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(tone.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                        if (T3kConfig.IN_APP_FAVORITES) FavoriteButton(vm.isFavorite(tone)) { vm.toggleFavorite(tone) }
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         if (tone.gearLabel.isNotEmpty()) Chip(tone.gearLabel)
                         Chip(tone.formatLabel, MaterialTheme.colorScheme.secondary.copy(alpha = 0.35f))

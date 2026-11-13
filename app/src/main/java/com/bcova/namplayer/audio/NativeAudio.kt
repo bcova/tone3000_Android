@@ -33,6 +33,11 @@ object NativeAudio {
     /** EQ knobs 0..10, 5 = flat (like the NAM plugin's tone stack). */
     external fun setEq(enabled: Boolean, bass: Float, middle: Float, treble: Float)
 
+    /** Tuner mode: mutes the output and analyzes the input. */
+    external fun setTunerActive(active: Boolean)
+    /** [hz, clarity]. hz = 0 when there's no clear note. Call off the main thread. */
+    external fun readTunerPitch(): FloatArray
+
     /** Peak level (linear) since the last call. */
     external fun takeInputPeak(): Float
     external fun takeOutputPeak(): Float

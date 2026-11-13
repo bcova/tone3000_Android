@@ -7,6 +7,7 @@ import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
@@ -37,6 +38,7 @@ sealed interface Screen {
     data class Library(val target: BlockTarget) : Screen
     data class ToneDetail(val toneId: String, val target: BlockTarget) : Screen
     data class Search(val target: BlockTarget) : Screen
+    data object Tuner : Screen
 }
 
 /** Which list the tag/make picker is showing. */
@@ -300,6 +302,43 @@ class T3kViewModel(app: Application) : AndroidViewModel(app) {
             } finally {
                 state.installing = false
             }
+        }
+    }
+
+    // ---- Favorites (heart button; only when T3kConfig.IN_APP_FAVORITES is on)
+
+    /** Favorites changed in the app, so lists show them right away. */
+    private val favoriteOverrides = mutableStateMapOf<String, Boolean>()
+
+    fun isFavorite(tone: Tone): Boolean = favoriteOverrides[tone.id] ?: tone.isFavorite
+
+    fun toggleFavorite(tone: Tone) {
+        val newValue = !isFavorite(tone)
+        favoriteOverrides[tone.id] = newValue
+        updateFavoritesList(tone, newValue)
+        viewModelScope.launch {
+            try {
+                client.setFavorite(tone.id, newValue)
+            } catch (e: SignedOutException) {
+                favoriteOverrides[tone.id] = !newValue
+                updateFavoritesList(tone, !newValue)
+                handleSignedOut(e)
+            } catch (e: Exception) {
+                // Undo, and say why.
+                favoriteOverrides[tone.id] = !newValue
+                updateFavoritesList(tone, !newValue)
+                message = e.message ?: "Couldn't update favorites."
+            }
+        }
+    }
+
+    /** Keeps the Favorites tab in step without waiting for TONE3000. */
+    private fun updateFavoritesList(tone: Tone, favorite: Boolean) {
+        if (tab != LibraryTab.FAVORITES) return // it reloads when you open the tab
+        if (favorite) {
+            if (tones.none { it.id == tone.id }) tones.add(0, tone)
+        } else {
+            tones.removeAll { it.id == tone.id }
         }
     }
 

@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "Effects.h"
+#include "Tuner.h"
 
 namespace nam
 {
@@ -86,6 +87,13 @@ public:
     mTreble.store(treble);
     mEqEnabled.store(enabled);
   }
+
+  // ---- Tuner
+  // While active, the output is muted (silent tuning) and recent input is kept for analysis.
+  void setTunerActive(bool active) { mTunerActive.store(active); }
+  bool tunerActive() const { return mTunerActive.load(); }
+  // Background thread: analyze the most recent input. hz = 0 when there's no clear note.
+  PitchResult readTunerPitch();
 
   // ---- Real-time (audio thread)
   // Mono in, mono out. `in` and `out` may point to the same buffer.
@@ -162,6 +170,13 @@ private:
   bool mGateWasOn = false;
   bool mEqWasOn = false;
   float mAppliedBass = -1.0f, mAppliedMiddle = -1.0f, mAppliedTreble = -1.0f;
+
+  // Tuner: the audio thread writes raw input into a ring; readTunerPitch() copies from it.
+  static constexpr int kTunerRing = 8192; // power of two
+  static constexpr int kTunerWindow = 4096; // ~85 ms at 48 kHz
+  std::atomic<bool> mTunerActive{false};
+  std::unique_ptr<std::atomic<float>[]> mTunerRing; // relaxed atomics: no torn floats
+  std::atomic<uint32_t> mTunerWrite{0};
 };
 
 } // namespace ampengine

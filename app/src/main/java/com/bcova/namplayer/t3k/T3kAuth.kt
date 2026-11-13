@@ -26,6 +26,13 @@ object T3kConfig {
      * "Powered by TONE3000". Controlled by t3kFullCatalogSearch in gradle.properties.
      */
     val FULL_CATALOG_SEARCH: Boolean = BuildConfig.T3K_FULL_CATALOG_SEARCH
+
+    /**
+     * Heart button to favorite/unfavorite tones in the app (PUT/DELETE /tones/{id}/favorite).
+     * NOT covered by TONE3000's search approval: fine for personal development use, but get their
+     * OK before sharing the app with it on. Controlled by t3kInAppFavorites in gradle.properties.
+     */
+    val IN_APP_FAVORITES: Boolean = BuildConfig.T3K_IN_APP_FAVORITES
 }
 
 /** Why a sign-in was started, so we know what to do when the user comes back. */

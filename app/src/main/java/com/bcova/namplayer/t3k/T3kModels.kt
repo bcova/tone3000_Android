@@ -63,6 +63,7 @@ data class Tone(
     @SerialName("a2_models_count") val a2ModelsCount: Int = 0,
     @SerialName("downloads_count") val downloadsCount: Int = 0,
     @SerialName("favorites_count") val favoritesCount: Int = 0,
+    @SerialName("is_favorite") val isFavorite: Boolean = false,
     val license: String? = null,
     val url: String? = null,
 ) {

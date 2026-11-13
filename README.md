@@ -16,6 +16,12 @@ Below the chain are a **noise gate** (threshold) and **EQ** (bass / middle / tre
 using the same curves as the NAM plugin. The gate listens to your guitar before the chain and turns the
 sound down after it. The EQ comes after the whole chain.
 
+**Presets** (button at the top) save the whole chain plus gate, EQ and volume. Your current setup is also
+**remembered automatically** and restored the next time you open the app. Tones you load are copied into
+the app's private storage, so presets work offline. Copies that nothing uses are deleted when the app starts.
+
+**Tuner** (button at the top): a chromatic tuner, A4 = 440 Hz. The sound is muted while it's open.
+
 Tap **Add block** to add a Pedal, Amp, Cab, Outboard, Space or Any block. Use a block's **⋮** menu
 to move it up or down, empty it, or remove it. Watch the **CPU** meter: near 100%, the audio crackles.
 
@@ -161,6 +167,12 @@ Conditions from that approval:
 
 The switch `t3kFullCatalogSearch` in `gradle.properties` stays `true`. Setting it to `false` removes search
 from the app (only needed if the approval is ever withdrawn).
+
+### ⚠️ In-app favorites: personal use only (for now)
+
+The ♥ button on tones uses TONE3000's favorite/unfavorite endpoints (`PUT`/`DELETE /tones/{id}/favorite`).
+Their email approval covered search, tags and makes, **not** these. Personal/development use is allowed by their
+terms. **Before sharing the app**, either get TONE3000's OK or set `t3kInAppFavorites=false` in `gradle.properties`.
 
 ### TONE3000 integration notes
 

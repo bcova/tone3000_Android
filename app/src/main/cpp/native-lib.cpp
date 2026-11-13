@@ -109,6 +109,21 @@ JNIEXPORT void JNICALL JNI_FN(setEq)(JNIEnv*, jobject, jboolean enabled, jfloat 
   engine().core().setEq(enabled == JNI_TRUE, bass, middle, treble);
 }
 
+JNIEXPORT void JNICALL JNI_FN(setTunerActive)(JNIEnv*, jobject, jboolean active)
+{
+  engine().core().setTunerActive(active == JNI_TRUE);
+}
+
+// Returns [hz, clarity]; hz = 0 when there's no clear note.
+JNIEXPORT jfloatArray JNICALL JNI_FN(readTunerPitch)(JNIEnv* env, jobject)
+{
+  const ampengine::PitchResult r = engine().core().readTunerPitch();
+  jfloatArray out = env->NewFloatArray(2);
+  const jfloat values[2] = {r.hz, r.clarity};
+  env->SetFloatArrayRegion(out, 0, 2, values);
+  return out;
+}
+
 JNIEXPORT jfloat JNICALL JNI_FN(takeInputPeak)(JNIEnv*, jobject)
 {
   return engine().core().takeInputPeak();

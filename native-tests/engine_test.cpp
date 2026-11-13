@@ -319,6 +319,51 @@ int main()
     CHECK(std::fabs(playOn - playOff) < 0.5, "gate leaves playing untouched");
   }
 
+  std::printf("9) Tuner\n");
+  {
+    // Pure pitch detection on strings of a guitar (and a low bass/7-string note).
+    struct Note { const char* name; double hz; };
+    for (Note note : {Note{"B0 (7-str/bass)", 30.87}, Note{"E2", 82.41}, Note{"A2", 110.0}, Note{"D3", 146.83},
+                      Note{"G3", 196.0}, Note{"B3", 246.94}, Note{"E4", 329.63}, Note{"E5 (12th fret)", 659.26}})
+    {
+      // Guitar-like: fundamental + harmonics.
+      std::vector<float> x(4096);
+      for (int i = 0; i < 4096; ++i)
+      {
+        const double t = i / kRate;
+        x[i] = static_cast<float>(0.2 * std::sin(2 * M_PI * note.hz * t) + 0.15 * std::sin(2 * M_PI * 2 * note.hz * t)
+                                  + 0.08 * std::sin(2 * M_PI * 3 * note.hz * t));
+      }
+      auto r = ampengine::detectPitch(x.data(), 4096, kRate);
+      const double cents = 1200.0 * std::log2(r.hz / note.hz);
+      std::printf("   %-16s %7.2f Hz -> %7.2f Hz (%+.2f cents)\n", note.name, note.hz, r.hz, cents);
+      CHECK(std::fabs(cents) < 2.0, "pitch within 2 cents");
+    }
+    std::vector<float> quiet(4096, 0.0f);
+    CHECK(ampengine::detectPitch(quiet.data(), 4096, kRate).hz == 0.0f, "silence gives no pitch");
+
+    // Through the engine: tuner mode mutes the output and reads the input.
+    EngineCore core(kRate);
+    CHECK(core.loadBlock(1, (models / "lstm.nam").string()).empty(), "load");
+    core.setTunerActive(true);
+    const auto a2 = sine(110.0, 0.2, 9600);
+    std::vector<float> out(256);
+    float outPeak = 0.0f;
+    for (size_t pos = 0; pos + 256 <= a2.size(); pos += 256)
+    {
+      core.process(a2.data() + pos, out.data(), 256);
+      for (float v : out)
+        outPeak = std::max(outPeak, std::fabs(v));
+    }
+    CHECK(outPeak == 0.0f, "output muted while tuning");
+    auto r = core.readTunerPitch();
+    CHECK(std::fabs(r.hz - 110.0f) < 0.5f, "engine tuner reads A2");
+    core.setTunerActive(false);
+    for (size_t pos = 0; pos + 256 <= a2.size(); pos += 256)
+      core.process(a2.data() + pos, out.data(), 256);
+    CHECK(std::fabs(out[100]) > 0.0f, "sound returns after tuning");
+  }
+
   fs::remove_all(tmp);
   if (gFailures == 0)
     std::printf("\nALL TESTS PASSED\n");

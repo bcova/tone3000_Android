@@ -67,6 +67,7 @@ EngineCore::EngineCore(double sampleRate)
 , mChain(new Chain())
 , mScratch(kMaxFrames, 0.0f)
 , mGateGains(kMaxFrames, 1.0f)
+, mTunerRing(new std::atomic<float>[kTunerRing]())
 {
   mGate.prepare(sampleRate);
 }
@@ -220,6 +221,18 @@ void EngineCore::waitForAudioThread()
     std::this_thread::sleep_for(std::chrono::microseconds(200));
 }
 
+PitchResult EngineCore::readTunerPitch()
+{
+  // Copy the latest window. The audio thread may overwrite the oldest samples meanwhile;
+  // at worst one reading is a little off and the next one is fine.
+  std::vector<float> window(kTunerWindow);
+  const uint32_t end = mTunerWrite.load(std::memory_order_acquire);
+  const uint32_t start = end - kTunerWindow;
+  for (int i = 0; i < kTunerWindow; ++i)
+    window[i] = mTunerRing[(start + i) & (kTunerRing - 1)].load(std::memory_order_relaxed);
+  return detectPitch(window.data(), kTunerWindow, mSampleRate);
+}
+
 void EngineCore::runBlock(Block& block, float* buffer, int numFrames, bool normalize)
 {
   float* inPtr = buffer;
@@ -236,6 +249,24 @@ void EngineCore::process(const float* in, float* out, int numFrames)
   mProcessSeq.fetch_add(1); // now odd: "audio thread busy"
   const auto start = std::chrono::steady_clock::now();
   ScopedFlushDenormals noDenormals;
+
+  if (mTunerActive.load(std::memory_order_relaxed))
+  {
+    // Tuner mode: keep the raw guitar signal for pitch detection, and stay silent.
+    uint32_t w = mTunerWrite.load(std::memory_order_relaxed);
+    float peak = 0.0f;
+    for (int i = 0; i < numFrames; ++i)
+    {
+      mTunerRing[w & (kTunerRing - 1)].store(in[i], std::memory_order_relaxed);
+      ++w;
+      peak = std::max(peak, std::fabs(in[i]));
+    }
+    mTunerWrite.store(w, std::memory_order_release);
+    std::fill(out, out + numFrames, 0.0f);
+    updateMax(mInputPeak, peak);
+    mProcessSeq.fetch_add(1);
+    return;
+  }
 
   const Chain* chain = mChain.load();
   const bool normalize = mNormalize.load(std::memory_order_relaxed);

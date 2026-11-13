@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import com.bcova.namplayer.t3k.Option
 import com.bcova.namplayer.t3k.SearchFilters
 import com.bcova.namplayer.t3k.SearchOptions
+import com.bcova.namplayer.t3k.T3kConfig
 import com.bcova.namplayer.t3k.BlockTarget
 import java.text.NumberFormat
 
@@ -170,7 +171,11 @@ fun SearchScreen(target: BlockTarget, vm: T3kViewModel) {
         // ---- Results
         LazyColumn(state = listState, modifier = Modifier.weight(1f), contentPadding = PaddingValues(vertical = 4.dp)) {
             items(vm.results, key = { it.id }) { tone ->
-                ToneRow(tone) { vm.openTone(tone, target) }
+                ToneRow(
+                tone,
+                favorite = if (T3kConfig.IN_APP_FAVORITES) vm.isFavorite(tone) else null,
+                onFavorite = { vm.toggleFavorite(tone) },
+                ) { vm.openTone(tone, target) }
                 HorizontalDivider(Modifier.padding(start = 92.dp), color = MaterialTheme.colorScheme.surfaceVariant)
             }
             if (vm.searchLoading) {

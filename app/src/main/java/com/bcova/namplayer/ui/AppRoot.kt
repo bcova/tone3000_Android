@@ -14,6 +14,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.bcova.namplayer.rig.LoadedTone
 
 @Composable
 fun AppRoot(amp: AmpViewModel = viewModel(), t3k: T3kViewModel = viewModel()) {
@@ -26,12 +27,14 @@ fun AppRoot(amp: AmpViewModel = viewModel(), t3k: T3kViewModel = viewModel()) {
                 Screen.Player -> PlayerScreen(
                     vm = amp,
                     onBrowse = t3k::openBrowser,
+                    onTuner = { t3k.push(Screen.Tuner) },
                     signedIn = t3k.signedIn,
                     onSignOut = t3k::signOut,
                 )
                 is Screen.Partnership -> PartnershipScreen(s.target, t3k)
                 is Screen.Library -> LibraryScreen(s.target, t3k)
                 is Screen.Search -> SearchScreen(s.target, t3k)
+                Screen.Tuner -> TunerScreen(amp, onBack = { t3k.back() })
                 is Screen.ToneDetail -> ToneDetailScreen(t3k, onInstall = {
                     t3k.installSelected { file, tone, model, target ->
                         // Load into the block the user was choosing for.

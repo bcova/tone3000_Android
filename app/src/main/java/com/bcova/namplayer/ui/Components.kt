@@ -16,9 +16,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -119,7 +122,7 @@ fun Chip(text: String, color: Color = MaterialTheme.colorScheme.surfaceVariant) 
 
 /** One row in a tone list: image, title, gear type, format, creator. */
 @Composable
-fun ToneRow(tone: Tone, onClick: () -> Unit) {
+fun ToneRow(tone: Tone, favorite: Boolean? = null, onFavorite: () -> Unit = {}, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -142,6 +145,19 @@ fun ToneRow(tone: Tone, onClick: () -> Unit) {
             }
             CreatorRow(tone.user)
         }
+        if (favorite != null) FavoriteButton(favorite, onFavorite)
+    }
+}
+
+/** Heart button: filled when the tone is in your TONE3000 favorites. */
+@Composable
+fun FavoriteButton(favorite: Boolean, onToggle: () -> Unit) {
+    IconButton(onClick = onToggle) {
+        Icon(
+            if (favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+            contentDescription = if (favorite) "Remove from favorites" else "Add to favorites",
+            tint = if (favorite) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

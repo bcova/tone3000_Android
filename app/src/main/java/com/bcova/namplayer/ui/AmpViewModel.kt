@@ -8,43 +8,53 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.bcova.namplayer.audio.NativeAudio
+import com.bcova.namplayer.rig.LoadedTone
+import com.bcova.namplayer.rig.Preset
+import com.bcova.namplayer.rig.RigState
+import com.bcova.namplayer.rig.RigStore
+import com.bcova.namplayer.rig.SavedBlock
+import com.bcova.namplayer.rig.SavedSession
+import com.bcova.namplayer.rig.TunerReading
+import com.bcova.namplayer.rig.noteFor
 import com.bcova.namplayer.t3k.BlockKind
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.UUID
 import kotlin.math.log10
 import kotlin.math.max
-
-/** A tone loaded from TONE3000, shown on its signal-chain block (TONE3000 design rule 5). */
-data class LoadedTone(
-    val toneId: String,
-    val title: String,
-    val imageUrl: String?,
-    val gearLabel: String,
-    val formatLabel: String,
-    val creator: String,
-    val modelName: String,
-)
 
 /** One block in the signal chain. It's empty until a .nam or .wav file is loaded into it. */
 class ChainBlock(val id: Long, val kind: BlockKind) {
     var fileName by mutableStateOf<String?>(null)
+    var file by mutableStateOf<String?>(null) // name inside the tone library
     var tone by mutableStateOf<LoadedTone?>(null) // null when loaded from a phone file
     var enabled by mutableStateOf(true)
     var loading by mutableStateOf(false)
     val isEmpty: Boolean get() = fileName == null
 }
 
+@OptIn(FlowPreview::class)
 class AmpViewModel(app: Application) : AndroidViewModel(app) {
 
-    /** The chain, first to last. Starts as Amp -> Cab, like before. */
+    private val store = RigStore(app.filesDir)
+    /** Rig changes (loading, presets) happen one at a time. */
+    private val rigLock = Mutex()
+
+    /** The chain, first to last. */
     val blocks = mutableStateListOf<ChainBlock>()
     private var nextId = 1L
 
@@ -53,6 +63,9 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
     var status by mutableStateOf("Stopped")
         private set
     var message by mutableStateOf<String?>(null)
+        private set
+    /** True while the last setup is being restored at startup. */
+    var restoring by mutableStateOf(true)
         private set
 
     var inputGainDb by mutableFloatStateOf(0f)
@@ -76,6 +89,14 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
     var treble by mutableFloatStateOf(5f)
         private set
 
+    // Presets
+    val presets = mutableStateListOf<Preset>()
+    var currentPresetId by mutableStateOf<String?>(null)
+        private set
+    val currentPreset: Preset? get() = presets.firstOrNull { it.id == currentPresetId }
+    /** The current sound differs from the selected preset. */
+    val presetModified: Boolean get() = currentPreset?.let { it.rig != snapshot() } ?: false
+
     /** Meter levels in dBFS (-60..0). */
     var inputLevelDb by mutableFloatStateOf(METER_FLOOR_DB)
         private set
@@ -85,16 +106,15 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
     var cpuLoad by mutableFloatStateOf(0f)
         private set
 
+    // Tuner
+    var tunerReading by mutableStateOf<TunerReading?>(null)
+        private set
+    private var tunerJob: Job? = null
+
     private var meterJob: Job? = null
 
     init {
-        NativeAudio.setInputGainDb(inputGainDb)
-        NativeAudio.setOutputGainDb(outputGainDb)
-        NativeAudio.setNormalize(normalize)
-        pushGate()
-        pushEq()
-        blocks += ChainBlock(nextId++, BlockKind.AMP)
-        blocks += ChainBlock(nextId++, BlockKind.CAB)
+        viewModelScope.launch { restoreLastSession() }
     }
 
     // ---- Audio on/off and controls
@@ -192,6 +212,7 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
     fun clearBlock(block: ChainBlock) {
         NativeAudio.removeBlock(block.id)
         block.fileName = null
+        block.file = null
         block.tone = null
         block.enabled = true
     }
@@ -216,17 +237,27 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Loads a file that's already on disk (e.g. downloaded from TONE3000) into block [blockId].
+     * A copy goes into the tone library so presets keep working offline.
      * If that block was removed meanwhile, a new block of [kind] is added. Returns an error or null.
      */
-    suspend fun loadFile(blockId: Long, kind: BlockKind, file: File, tone: LoadedTone?): String? {
-        val block = blocks.firstOrNull { it.id == blockId } ?: addBlock(kind) ?: return message
+    suspend fun loadFile(blockId: Long, kind: BlockKind, file: File, tone: LoadedTone?, preferredName: String? = null): String? =
+        rigLock.withLock {
+            val block = blocks.firstOrNull { it.id == blockId } ?: addBlock(kind) ?: return@withLock message
+            loadIntoBlock(block, file, tone, preferredName ?: file.name)
+        }
+
+    private suspend fun loadIntoBlock(block: ChainBlock, file: File, tone: LoadedTone?, preferredName: String): String? {
         block.loading = true
         try {
-            val error = withContext(Dispatchers.IO) { NativeAudio.loadBlock(block.id, file.path) }
+            val stored = withContext(Dispatchers.IO) {
+                runCatching { store.importToLibrary(file, preferredName) }
+            }.getOrElse { return it.message ?: "Could not save the file." }
+            val error = withContext(Dispatchers.IO) { NativeAudio.loadBlock(block.id, stored.path) }
             if (error == null) {
-                block.fileName = tone?.modelName ?: file.name
+                block.fileName = tone?.modelName ?: preferredName
+                block.file = stored.name
                 block.tone = tone
-                if (!block.enabled) setEnabled(block, true)
+                NativeAudio.setBlockEnabled(block.id, block.enabled)
                 pushOrder() // a newly loaded block goes where it sits in the list
             }
             return error
@@ -245,14 +276,13 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
                     if (!lower.endsWith(".nam") && !lower.endsWith(".wav")) {
                         return@runCatching null to "Please pick a .nam capture or a .wav IR (got \"$name\")."
                     }
-                    val dir = File(getApplication<Application>().filesDir, "blocks/${block.id}").apply { mkdirs() }
-                    dir.listFiles()?.forEach { it.delete() } // keep only the current file
-                    val file = File(dir, name.replace('/', '_'))
+                    val tmp = File(getApplication<Application>().cacheDir, "import/${name.replace('/', '_')}")
+                    tmp.parentFile?.mkdirs()
                     getApplication<Application>().contentResolver.openInputStream(uri).use { input ->
                         requireNotNull(input) { "Could not open the file." }
-                        file.outputStream().use { input.copyTo(it) }
+                        tmp.outputStream().use { input.copyTo(it) }
                     }
-                    file to null
+                    tmp to null
                 }.getOrElse { null to (it.message ?: "Could not read the file.") }
             }
             val (file, error) = result
@@ -260,7 +290,8 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
                 message = error
                 return@launch
             }
-            loadFile(block.id, block.kind, file, tone = null)?.let { message = it }
+            loadFile(block.id, block.kind, file, tone = null, preferredName = file.name)?.let { message = it }
+            withContext(Dispatchers.IO) { file.delete() }
         }
     }
 
@@ -269,6 +300,151 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
             .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
             ?.use { c -> if (c.moveToFirst()) return c.getString(0) }
         return uri.lastPathSegment?.substringAfterLast('/') ?: "file"
+    }
+
+    // ---- Saving: current setup, presets
+
+    /** The current sound as plain data. */
+    fun snapshot(): RigState = RigState(
+        blocks = blocks.map { SavedBlock(it.kind.name, it.enabled, it.file, it.fileName, it.tone) },
+        inputGainDb = inputGainDb,
+        outputGainDb = outputGainDb,
+        normalize = normalize,
+        gateEnabled = gateEnabled,
+        gateThresholdDb = gateThresholdDb,
+        eqEnabled = eqEnabled,
+        bass = bass,
+        middle = middle,
+        treble = treble,
+    )
+
+    /** Rebuilds the whole rig from [rig]. Returns how many files couldn't be loaded. */
+    private suspend fun applyRig(rig: RigState): Int = rigLock.withLock {
+        // Empty the engine first.
+        blocks.forEach { NativeAudio.removeBlock(it.id) }
+        blocks.clear()
+        setInputGain(rig.inputGainDb)
+        setOutputGain(rig.outputGainDb)
+        setNormalizeEnabled(rig.normalize)
+        gateEnabled = rig.gateEnabled
+        gateThresholdDb = rig.gateThresholdDb
+        pushGate()
+        eqEnabled = rig.eqEnabled
+        setEqKnobs(rig.bass, rig.middle, rig.treble)
+
+        var missing = 0
+        for (saved in rig.blocks.take(MAX_BLOCKS)) {
+            val kind = runCatching { BlockKind.valueOf(saved.kind) }.getOrDefault(BlockKind.ANY)
+            val block = ChainBlock(nextId++, kind).apply { enabled = saved.enabled }
+            blocks += block
+            val name = saved.file ?: continue
+            val file = store.libraryFile(name)
+            val error = if (file.exists()) loadIntoBlock(block, file, saved.tone, saved.fileName ?: name) else "missing"
+            if (error != null) missing++
+        }
+        pushOrder()
+        missing
+    }
+
+    private suspend fun restoreLastSession() {
+        val (session, saved) = withContext(Dispatchers.IO) { store.loadSession() to store.loadPresets() }
+        presets.addAll(saved)
+        // Throw out tone copies that nothing uses anymore (only at startup, when nothing is loading).
+        withContext(Dispatchers.IO) {
+            val inUse = (session?.rig?.files ?: emptySet()) + saved.flatMap { it.rig.files }
+            store.cleanLibrary(inUse)
+        }
+        if (session != null) {
+            currentPresetId = session.currentPresetId?.takeIf { id -> presets.any { it.id == id } }
+            val missing = applyRig(session.rig)
+            if (missing > 0) message = "$missing tone file(s) from last time couldn't be loaded."
+        } else {
+            // First launch: an empty Amp -> Cab chain, like before.
+            applyRig(RigState(blocks = listOf(SavedBlock(BlockKind.AMP.name), SavedBlock(BlockKind.CAB.name))))
+        }
+        restoring = false
+        startAutosave()
+    }
+
+    /** Saves the current setup about a second after anything changes. */
+    private fun startAutosave() {
+        viewModelScope.launch {
+            snapshotFlow { SavedSession(snapshot(), currentPresetId) }
+                .drop(1)
+                .debounce(800)
+                .collect { session -> withContext(Dispatchers.IO) { store.saveSession(session) } }
+        }
+    }
+
+    fun savePresetAs(name: String) {
+        val preset = Preset(UUID.randomUUID().toString(), name.trim().ifBlank { "My preset" }, snapshot())
+        presets += preset
+        currentPresetId = preset.id
+        persistPresets()
+    }
+
+    /** Overwrites the selected preset with the current sound. */
+    fun updateCurrentPreset() {
+        val index = presets.indexOfFirst { it.id == currentPresetId }
+        if (index < 0) return
+        presets[index] = presets[index].copy(rig = snapshot())
+        persistPresets()
+    }
+
+    fun renamePreset(preset: Preset, name: String) {
+        val index = presets.indexOfFirst { it.id == preset.id }
+        if (index < 0 || name.isBlank()) return
+        presets[index] = presets[index].copy(name = name.trim())
+        persistPresets()
+    }
+
+    fun deletePreset(preset: Preset) {
+        presets.removeAll { it.id == preset.id }
+        if (currentPresetId == preset.id) currentPresetId = null
+        persistPresets()
+    }
+
+    fun loadPreset(preset: Preset) {
+        viewModelScope.launch {
+            currentPresetId = preset.id
+            val missing = applyRig(preset.rig)
+            if (missing > 0) message = "$missing tone file(s) in \"${preset.name}\" couldn't be loaded."
+        }
+    }
+
+    private fun persistPresets() {
+        val copy = presets.toList()
+        viewModelScope.launch(Dispatchers.IO) { store.savePresets(copy) }
+    }
+
+    // ---- Tuner
+
+    /** Starts tuning: output goes silent, and the reading updates ~20 times a second. */
+    fun startTuner() {
+        if (!running) toggleAudio()
+        NativeAudio.setTunerActive(true)
+        tunerJob?.cancel()
+        tunerJob = viewModelScope.launch {
+            var lastHeard = 0L
+            while (isActive) {
+                val r = withContext(Dispatchers.Default) { NativeAudio.readTunerPitch() }
+                val hz = r[0]
+                if (hz > 0f && r[1] > 0.8f) {
+                    tunerReading = noteFor(hz)
+                    lastHeard = System.currentTimeMillis()
+                } else if (System.currentTimeMillis() - lastHeard > 1500) {
+                    tunerReading = null // let the display rest after the note fades
+                }
+                delay(50)
+            }
+        }
+    }
+
+    fun stopTuner() {
+        tunerJob?.cancel()
+        tunerJob = null
+        tunerReading = null
+        NativeAudio.setTunerActive(false)
     }
 
     // ---- Meters
@@ -301,6 +477,7 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
+        NativeAudio.setTunerActive(false)
         NativeAudio.stop()
         super.onCleared()
     }
@@ -308,7 +485,6 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
     companion object {
         const val MAX_BLOCKS = 8 // matches EngineCore::kMaxBlocks
         private const val METER_FLOOR_DB = -60f
-
         private fun toDb(peak: Float): Float = max(METER_FLOOR_DB, 20f * log10(max(peak, 1e-6f)))
 
         // Fast attack, slow release, like a real meter.
