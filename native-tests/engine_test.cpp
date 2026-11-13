@@ -77,6 +77,27 @@ static void writeTestIr(const fs::path& path, int length, int sampleRate)
   f.write(reinterpret_cast<const char*>(samples.data()), dataBytes);
 }
 
+// RMS level (dB) of the second half of `signal` after running it through `core`.
+static double renderDb(EngineCore& core, const std::vector<float>& signal)
+{
+  std::vector<float> out(signal.size());
+  for (size_t pos = 0; pos + 256 <= signal.size(); pos += 256)
+    core.process(signal.data() + pos, out.data() + pos, 256);
+  double sum = 0;
+  const size_t start = out.size() / 2;
+  for (size_t i = start; i < out.size(); ++i)
+    sum += double(out[i]) * out[i];
+  return 10.0 * std::log10(sum / (out.size() - start) + 1e-20);
+}
+
+static std::vector<float> sine(double freq, double amp, int frames)
+{
+  std::vector<float> v(frames);
+  for (int i = 0; i < frames; ++i)
+    v[i] = static_cast<float>(amp * std::sin(2 * M_PI * freq * i / kRate));
+  return v;
+}
+
 struct RunStats
 {
   bool allFinite = true;
@@ -258,6 +279,44 @@ int main()
     audio.join();
     std::printf("   processed %ld blocks during chain edits\n", blocks.load());
     CHECK(finite.load(), "output stayed finite during edits");
+  }
+
+  std::printf("8) EQ (bass/middle/treble) and noise gate\n");
+  {
+    const int n = static_cast<int>(kRate); // 1 second
+    const auto low = sine(60, 0.1, n), mid = sine(425, 0.1, n), high = sine(8000, 0.1, n);
+    auto dbWith = [&](const std::vector<float>& sig, bool on, float b, float m, float t) {
+      EngineCore core(kRate);
+      core.setEq(on, b, m, t);
+      return renderDb(core, sig);
+    };
+    const double ref = dbWith(low, false, 5, 5, 5);
+    CHECK(std::fabs(dbWith(low, true, 5, 5, 5) - ref) < 0.1, "EQ at 5/5/5 is flat");
+    const double bassBoost = dbWith(low, true, 10, 5, 5) - ref;
+    const double midCut = dbWith(mid, true, 5, 0, 5) - dbWith(mid, false, 5, 5, 5);
+    const double trebleCut = dbWith(high, true, 5, 5, 0) - dbWith(high, false, 5, 5, 5);
+    std::printf("   bass 10: %+.1f dB @60Hz, middle 0: %+.1f dB @425Hz, treble 0: %+.1f dB @8kHz\n", bassBoost,
+                midCut, trebleCut);
+    CHECK(bassBoost > 17 && bassBoost < 21, "bass 10 boosts lows by ~20 dB");
+    CHECK(midCut < -13 && midCut > -16, "middle 0 cuts mids by ~15 dB");
+    CHECK(trebleCut < -8.5 && trebleCut > -10.5, "treble 0 cuts highs by ~10 dB");
+
+    // Gate: quiet hiss (-70 dB) under a -50 dB threshold gets silenced; playing passes.
+    std::mt19937 rng(7);
+    std::normal_distribution<float> noise(0.0f, 0.0003f);
+    std::vector<float> hiss(n);
+    for (auto& s : hiss)
+      s = noise(rng);
+    auto gated = [&](const std::vector<float>& sig, bool on) {
+      EngineCore core(kRate);
+      core.setGate(on, -50.0f);
+      return renderDb(core, sig);
+    };
+    const double hissOff = gated(hiss, false), hissOn = gated(hiss, true);
+    const double playOff = gated(low, false), playOn = gated(low, true);
+    std::printf("   gate: hiss %.1f -> %.1f dB, playing %.1f -> %.1f dB\n", hissOff, hissOn, playOff, playOn);
+    CHECK(hissOn < hissOff - 40, "gate silences hiss below the threshold");
+    CHECK(std::fabs(playOn - playOff) < 0.5, "gate leaves playing untouched");
   }
 
   fs::remove_all(tmp);

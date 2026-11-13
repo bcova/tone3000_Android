@@ -31,6 +31,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
@@ -70,6 +71,7 @@ import kotlin.math.roundToInt
 fun PlayerScreen(vm: AmpViewModel, onBrowse: (BlockTarget) -> Unit, signedIn: Boolean, onSignOut: () -> Unit) {
     val context = LocalContext.current
     var showAddSheet by remember { mutableStateOf(false) }
+    var showAbout by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) vm.toggleAudio()
@@ -91,7 +93,8 @@ fun PlayerScreen(vm: AmpViewModel, onBrowse: (BlockTarget) -> Unit, signedIn: Bo
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("NAM Player", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            Text("Ampfield", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            TextButton(onClick = { showAbout = true }) { Text("About") }
             if (signedIn) TextButton(onClick = onSignOut) { Text("Sign out") }
         }
 
@@ -144,6 +147,35 @@ fun PlayerScreen(vm: AmpViewModel, onBrowse: (BlockTarget) -> Unit, signedIn: Bo
         Meter("Out", vm.outputLevelDb)
         CpuMeter(vm.cpuLoad, vm.running)
 
+        // Noise gate + EQ, like the NAM / TONE3000 plugin.
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionHeader("Noise gate", vm.gateEnabled, vm::toggleGate)
+                Text(
+                    "Silences hiss and hum when you stop playing. Raise the threshold until the noise stops.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                LabeledSlider(
+                    label = "Threshold",
+                    value = vm.gateThresholdDb,
+                    range = -100f..0f,
+                    valueText = "${vm.gateThresholdDb.roundToInt()} dB",
+                    enabled = vm.gateEnabled,
+                    onChange = { vm.setGateThreshold(it.roundToInt().toFloat()) },
+                )
+
+                HorizontalDivider(Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+
+                SectionHeader("EQ", vm.eqEnabled, vm::toggleEq) {
+                    TextButton(onClick = vm::resetEq, enabled = vm.eqEnabled) { Text("Reset") }
+                }
+                EqKnob("Bass", vm.bass, vm.eqEnabled) { vm.setEqKnobs(bass = it) }
+                EqKnob("Middle", vm.middle, vm.eqEnabled) { vm.setEqKnobs(middle = it) }
+                EqKnob("Treble", vm.treble, vm.eqEnabled) { vm.setEqKnobs(treble = it) }
+            }
+        }
+
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 GainSlider("Input gain", vm.inputGainDb, -20f..20f, vm::setInputGain)
@@ -167,6 +199,8 @@ fun PlayerScreen(vm: AmpViewModel, onBrowse: (BlockTarget) -> Unit, signedIn: Bo
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+
+    if (showAbout) AboutDialog(onDismiss = { showAbout = false })
 
     if (showAddSheet) {
         AddBlockSheet(
@@ -316,6 +350,59 @@ private fun SignalBlock(
             BrowseT3kButton(onClick = onBrowse, modifier = Modifier.fillMaxWidth(), fullLogo = true)
         }
     }
+}
+
+@Composable
+private fun SectionHeader(
+    title: String,
+    enabled: Boolean,
+    onToggle: (Boolean) -> Unit,
+    extra: @Composable () -> Unit = {},
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+        extra()
+        Switch(checked = enabled, onCheckedChange = onToggle)
+    }
+}
+
+@Composable
+private fun LabeledSlider(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    valueText: String,
+    enabled: Boolean,
+    onChange: (Float) -> Unit,
+) {
+    Column(Modifier.alpha(if (enabled) 1f else 0.5f)) {
+        Row {
+            Text(label, modifier = Modifier.weight(1f))
+            Text(valueText)
+        }
+        Slider(value = value, onValueChange = onChange, valueRange = range, enabled = enabled)
+    }
+}
+
+/** 0..10 knob shown as a slider, 5 = flat. Shows the knob value and roughly what it does in dB. */
+@Composable
+private fun EqKnob(label: String, value: Float, enabled: Boolean, onChange: (Float) -> Unit) {
+    // Same dB-per-step as the engine's tone stack (bass 4, middle 3, treble 2).
+    val dbPerStep = when (label) {
+        "Bass" -> 4f
+        "Middle" -> 3f
+        else -> 2f
+    }
+    val db = (value - 5f) * dbPerStep
+    LabeledSlider(
+        label = label,
+        value = value,
+        range = 0f..10f,
+        valueText = "%.1f  (%+.0f dB)".format(value, db),
+        enabled = enabled,
+        // Snap to 0.1 steps, and stick to 5 (flat) when close.
+        onChange = { v -> onChange(if (kotlin.math.abs(v - 5f) < 0.15f) 5f else (v * 10).roundToInt() / 10f) },
+    )
 }
 
 @Composable

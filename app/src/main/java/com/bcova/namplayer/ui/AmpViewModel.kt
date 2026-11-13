@@ -62,6 +62,20 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
     var normalize by mutableStateOf(true)
         private set
 
+    // Noise gate and EQ (like the NAM plugin)
+    var gateEnabled by mutableStateOf(false)
+        private set
+    var gateThresholdDb by mutableFloatStateOf(-60f)
+        private set
+    var eqEnabled by mutableStateOf(true)
+        private set
+    var bass by mutableFloatStateOf(5f)
+        private set
+    var middle by mutableFloatStateOf(5f)
+        private set
+    var treble by mutableFloatStateOf(5f)
+        private set
+
     /** Meter levels in dBFS (-60..0). */
     var inputLevelDb by mutableFloatStateOf(METER_FLOOR_DB)
         private set
@@ -77,6 +91,8 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
         NativeAudio.setInputGainDb(inputGainDb)
         NativeAudio.setOutputGainDb(outputGainDb)
         NativeAudio.setNormalize(normalize)
+        pushGate()
+        pushEq()
         blocks += ChainBlock(nextId++, BlockKind.AMP)
         blocks += ChainBlock(nextId++, BlockKind.CAB)
     }
@@ -111,6 +127,34 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
         normalize = enabled
         NativeAudio.setNormalize(enabled)
     }
+
+    fun toggleGate(enabled: Boolean) {
+        gateEnabled = enabled
+        pushGate()
+    }
+
+    fun setGateThreshold(db: Float) {
+        gateThresholdDb = db
+        pushGate()
+    }
+
+    fun toggleEq(enabled: Boolean) {
+        eqEnabled = enabled
+        pushEq()
+    }
+
+    fun setEqKnobs(bass: Float = this.bass, middle: Float = this.middle, treble: Float = this.treble) {
+        this.bass = bass
+        this.middle = middle
+        this.treble = treble
+        pushEq()
+    }
+
+    fun resetEq() = setEqKnobs(5f, 5f, 5f)
+
+    private fun pushGate() = NativeAudio.setGate(gateEnabled, gateThresholdDb)
+
+    private fun pushEq() = NativeAudio.setEq(eqEnabled, bass, middle, treble)
 
     fun dismissMessage() {
         message = null

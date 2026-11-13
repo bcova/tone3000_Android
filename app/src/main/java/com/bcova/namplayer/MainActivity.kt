@@ -9,7 +9,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import com.bcova.namplayer.t3k.AuthCallback
 import com.bcova.namplayer.ui.AppRoot
-import com.bcova.namplayer.ui.NamPlayerTheme
+import com.bcova.namplayer.ui.AmpfieldTheme
 import com.bcova.namplayer.ui.T3kViewModel
 
 class MainActivity : ComponentActivity() {
@@ -24,7 +24,7 @@ class MainActivity : ComponentActivity() {
         // App was started by TONE3000's redirect (e.g. Android closed it while the browser was open).
         if (savedInstanceState == null) handleIntent(intent)
         setContent {
-            NamPlayerTheme {
+            AmpfieldTheme {
                 AppRoot(t3k = t3k)
             }
         }

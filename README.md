@@ -1,4 +1,4 @@
-# tone3000_android
+# Ampfield
 
 A free Android app that plays **NAM (Neural Amp Modeler)** amp captures and **cabinet IRs**
 — the same kinds of tones you find on [TONE3000](https://www.tone3000.com).
@@ -12,6 +12,10 @@ guitar ─► USB interface ─► input gain ─► block ─► block ─► �
 ```
 
 The chain holds up to 8 blocks. Each block is a NAM capture (`.nam`) or an impulse response (`.wav`).
+Below the chain are a **noise gate** (threshold) and **EQ** (bass / middle / treble, 0–10 with 5 = flat),
+using the same curves as the NAM plugin. The gate listens to your guitar before the chain and turns the
+sound down after it. The EQ comes after the whole chain.
+
 Tap **Add block** to add a Pedal, Amp, Cab, Outboard, Space or Any block. Use a block's **⋮** menu
 to move it up or down, empty it, or remove it. Watch the **CPU** meter: near 100%, the audio crackles.
 
@@ -72,10 +76,28 @@ A2 only, calibrated, and verified creators.
 In desktop tests, a "standard" WaveNet model used about 25% of one fast CPU core. That may be too much
 for older phones. If you hear crackles, try a lighter capture.
 
+## Share the app (signed APK)
+
+Android apps must be **signed** with your own key. Updates must use the **same key**, or phones refuse them.
+
+1. In Android Studio: **Build → Generate Signed App Bundle / APK…** → choose **APK** → **Next**.
+2. Under *Key store path*, click **Create new…**
+   - Save it **outside** this project folder, e.g. `Documents/ampfield-release.jks`.
+   - Pick strong passwords and an alias (e.g. `ampfield`). Fill in at least your name.
+   - **Back up the .jks file and passwords** (e.g. a password manager plus a USB stick). If they're lost,
+     you can never ship an update to people who installed the app.
+3. Choose the **release** build variant → **Create**.
+4. The APK appears in `app/release/app-release.apk`. Send that file to friends (Drive, email…). On their phone:
+   tap it → allow *Install unknown apps* for that app once → **Install**.
+5. For each new version you share, raise `versionCode` (and `versionName`) in `app/build.gradle.kts`.
+
+Never commit the key: `*.jks`, `*.keystore` and `keystore.properties` are already in `.gitignore`.
+
 ## How the code is organized
 
 | Path | What it does |
 |---|---|
+| `app/src/main/cpp/engine/Effects.h` | Noise gate and bass/mid/treble EQ (NAM-plugin curves). |
 | `app/src/main/cpp/engine/EngineCore.*` | The signal chain: gains, NAM model, IR, meters. Plain C++, so it can be tested on a computer. |
 | `app/src/main/cpp/AudioEngine.*` | Connects the phone's audio hardware ([Oboe](https://github.com/google/oboe)) to the engine. Restarts automatically when you plug or unplug a device. |
 | `app/src/main/cpp/native-lib.cpp` | Bridge between Kotlin and C++ (JNI). |
@@ -159,5 +181,10 @@ from the app (only needed if the approval is ever withdrawn).
 
 ## License
 
-The NAM engine is MIT licensed (see `third_party/NeuralAmpModelerCore/LICENSE`).
-Choose a license for this app's own code before publishing it.
+Ampfield is MIT licensed. See [LICENSE](LICENSE).
+
+It bundles: [NeuralAmpModelerCore](https://github.com/sdatkinson/NeuralAmpModelerCore) (MIT),
+[Oboe](https://github.com/google/oboe) (Apache 2.0), Eigen (MPL 2.0), nlohmann/json (MIT), and AndroidX /
+Jetpack Compose / Kotlin / Coil (Apache 2.0). The credits are also shown in the app under **About**.
+TONE3000 logos (`res/drawable-nodpi/t3k_*`) are TONE3000's trademarks, used per their API guidelines, and are
+not covered by this project's license.

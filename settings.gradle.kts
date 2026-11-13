@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "tone3000_android"
+rootProject.name = "Ampfield"
 include(":app")

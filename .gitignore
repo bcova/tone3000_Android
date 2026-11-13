@@ -8,3 +8,8 @@ local.properties
 .externalNativeBuild/
 captures/
 .DS_Store
+
+# App signing keys and passwords: NEVER commit these.
+*.jks
+*.keystore
+keystore.properties

@@ -81,7 +81,7 @@ fun PartnershipScreen(target: BlockTarget, vm: T3kViewModel) {
             IconButton(onClick = { vm.back() }) { Icon(Icons.Default.Close, contentDescription = "Close") }
         }
         Spacer(Modifier.weight(1f))
-        Text("NAM Player", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Text("Ampfield", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Text("powered by", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 8.dp))
         T3kLogo(height = 40.dp)
         Spacer(Modifier.height(32.dp))

@@ -66,7 +66,9 @@ EngineCore::EngineCore(double sampleRate)
 : mSampleRate(sampleRate)
 , mChain(new Chain())
 , mScratch(kMaxFrames, 0.0f)
+, mGateGains(kMaxFrames, 1.0f)
 {
+  mGate.prepare(sampleRate);
 }
 
 EngineCore::~EngineCore()
@@ -240,6 +242,33 @@ void EngineCore::process(const float* in, float* out, int numFrames)
   const float inTarget = mInputGainTarget.load(std::memory_order_relaxed);
   const float outTarget = mOutputGainTarget.load(std::memory_order_relaxed);
 
+  const bool gateOn = mGateEnabled.load(std::memory_order_relaxed);
+  if (gateOn)
+  {
+    if (!mGateWasOn)
+      mGate.reset();
+    mGate.setThresholdDb(mGateThresholdDb.load(std::memory_order_relaxed));
+  }
+  mGateWasOn = gateOn;
+
+  const bool eqOn = mEqEnabled.load(std::memory_order_relaxed);
+  if (eqOn)
+  {
+    const float b = mBass.load(std::memory_order_relaxed);
+    const float m = mMiddle.load(std::memory_order_relaxed);
+    const float t = mTreble.load(std::memory_order_relaxed);
+    if (b != mAppliedBass || m != mAppliedMiddle || t != mAppliedTreble)
+    {
+      mToneStack.setKnobs(mSampleRate, b, m, t); // a few cos/pow calls: fine on the audio thread
+      mAppliedBass = b;
+      mAppliedMiddle = m;
+      mAppliedTreble = t;
+    }
+    if (!mEqWasOn)
+      mToneStack.reset();
+  }
+  mEqWasOn = eqOn;
+
   float inPeak = 0.0f;
   float outPeak = 0.0f;
   float* buf = mScratch.data();
@@ -259,9 +288,17 @@ void EngineCore::process(const float* in, float* out, int numFrames)
     }
     mInputGain = inTarget;
 
+    if (gateOn)
+      mGate.detect(buf, mGateGains.data(), n); // listen to the guitar before the chain
+
     for (Block* block : chain->blocks)
       if (block->enabled.load(std::memory_order_relaxed))
         runBlock(*block, buf, n, normalize);
+
+    if (gateOn)
+      NoiseGate::apply(buf, mGateGains.data(), n);
+    if (eqOn)
+      mToneStack.process(buf, n);
 
     const float outStep = (outTarget - mOutputGain) / static_cast<float>(n);
     for (int i = 0; i < n; ++i)

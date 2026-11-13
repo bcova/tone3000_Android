@@ -2,7 +2,8 @@
 
 // EngineCore: the platform-independent signal chain.
 //
-//   guitar in -> input gain -> block 1 -> block 2 -> ... -> output gain -> out
+//   guitar in -> input gain -> [gate listens] -> block 1 -> block 2 -> ...
+//            -> [gate turns down] -> EQ (bass/mid/treble) -> output gain -> out
 //
 // Each block is a NAM capture (.nam: pedal, amp, outboard...) or an impulse
 // response (.wav: cabinet, room...). Blocks are identified by an id chosen by the
@@ -27,6 +28,8 @@
 #include <mutex>
 #include <string>
 #include <vector>
+
+#include "Effects.h"
 
 namespace nam
 {
@@ -69,6 +72,20 @@ public:
   void setOutputGainDb(float db);
   // Match loudness between captures (uses the loudness stored in each .nam file).
   void setNormalize(bool enabled) { mNormalize.store(enabled); }
+  // Noise gate, like the NAM plugin. Threshold in dB (e.g. -60; lower = gentler).
+  void setGate(bool enabled, float thresholdDb)
+  {
+    mGateThresholdDb.store(thresholdDb);
+    mGateEnabled.store(enabled);
+  }
+  // EQ knobs 0..10 (5 = flat), like the NAM plugin's tone stack.
+  void setEq(bool enabled, float bass, float middle, float treble)
+  {
+    mBass.store(bass);
+    mMiddle.store(middle);
+    mTreble.store(treble);
+    mEqEnabled.store(enabled);
+  }
 
   // ---- Real-time (audio thread)
   // Mono in, mono out. `in` and `out` may point to the same buffer.
@@ -131,6 +148,20 @@ private:
   std::atomic<uint64_t> mProcessSeq{0};
 
   std::vector<float> mScratch; // audio-thread work buffer
+
+  // Gate + EQ: settings from any thread, state owned by the audio thread.
+  std::atomic<bool> mGateEnabled{false};
+  std::atomic<float> mGateThresholdDb{-60.0f};
+  std::atomic<bool> mEqEnabled{false};
+  std::atomic<float> mBass{5.0f};
+  std::atomic<float> mMiddle{5.0f};
+  std::atomic<float> mTreble{5.0f};
+  NoiseGate mGate;
+  ToneStack mToneStack;
+  std::vector<float> mGateGains;
+  bool mGateWasOn = false;
+  bool mEqWasOn = false;
+  float mAppliedBass = -1.0f, mAppliedMiddle = -1.0f, mAppliedTreble = -1.0f;
 };
 
 } // namespace ampengine

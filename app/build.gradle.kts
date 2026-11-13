@@ -14,8 +14,9 @@ android {
         applicationId = "com.bcova.namplayer"
         minSdk = 26 // Android 8.0: AAudio low-latency audio
         targetSdk = 35
+        // Raise versionCode by 1 for every build you share, or phones won't install it as an update.
         versionCode = 1
-        versionName = "0.2.0"
+        versionName = "1.0.0"
 
         // TONE3000 publishable key (client_id). Safe to ship in the app, per TONE3000's docs.
         // Set in gradle.properties as t3kClientId. NEVER put the secret key (t3k_cs_…) here.

@@ -28,6 +28,10 @@ object NativeAudio {
     external fun setInputGainDb(db: Float)
     external fun setOutputGainDb(db: Float)
     external fun setNormalize(enabled: Boolean)
+    /** Noise gate (like the NAM plugin). */
+    external fun setGate(enabled: Boolean, thresholdDb: Float)
+    /** EQ knobs 0..10, 5 = flat (like the NAM plugin's tone stack). */
+    external fun setEq(enabled: Boolean, bass: Float, middle: Float, treble: Float)
 
     /** Peak level (linear) since the last call. */
     external fun takeInputPeak(): Float

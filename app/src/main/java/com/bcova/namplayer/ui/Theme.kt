@@ -30,6 +30,6 @@ private val Colors = darkColorScheme(
 )
 
 @Composable
-fun NamPlayerTheme(content: @Composable () -> Unit) {
+fun AmpfieldTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = Colors, content = content)
 }

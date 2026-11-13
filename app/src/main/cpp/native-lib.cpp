@@ -99,6 +99,16 @@ JNIEXPORT void JNICALL JNI_FN(setNormalize)(JNIEnv*, jobject, jboolean enabled)
   engine().core().setNormalize(enabled == JNI_TRUE);
 }
 
+JNIEXPORT void JNICALL JNI_FN(setGate)(JNIEnv*, jobject, jboolean enabled, jfloat thresholdDb)
+{
+  engine().core().setGate(enabled == JNI_TRUE, thresholdDb);
+}
+
+JNIEXPORT void JNICALL JNI_FN(setEq)(JNIEnv*, jobject, jboolean enabled, jfloat bass, jfloat middle, jfloat treble)
+{
+  engine().core().setEq(enabled == JNI_TRUE, bass, middle, treble);
+}
+
 JNIEXPORT jfloat JNICALL JNI_FN(takeInputPeak)(JNIEnv*, jobject)
 {
   return engine().core().takeInputPeak();
