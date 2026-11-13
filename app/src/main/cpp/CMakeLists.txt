@@ -13,7 +13,8 @@ find_package(oboe REQUIRED CONFIG)
 add_library(ampengine SHARED
   native-lib.cpp
   AudioEngine.cpp
-  engine/EngineCore.cpp)
+  engine/EngineCore.cpp
+  engine/Recorder.cpp)
 
 target_include_directories(ampengine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(ampengine PRIVATE -O3 -Wall)

@@ -1,6 +1,8 @@
 package com.bcova.namplayer.ui
 
 import android.Manifest
+import android.content.Intent
+import android.os.Build
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,7 +27,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -60,6 +64,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.bcova.namplayer.rig.Recording
 import com.bcova.namplayer.t3k.BlockKind
 import com.bcova.namplayer.t3k.BlockTarget
 import kotlin.math.roundToInt
@@ -73,6 +78,8 @@ fun PlayerScreen(
     vm: AmpViewModel,
     onBrowse: (BlockTarget) -> Unit,
     onTuner: () -> Unit,
+    onSettings: () -> Unit,
+    onLive: () -> Unit,
     signedIn: Boolean,
     onSignOut: () -> Unit,
 ) {
@@ -81,8 +88,21 @@ fun PlayerScreen(
     var showAbout by remember { mutableStateOf(false) }
     var showPresets by remember { mutableStateOf(false) }
 
+    // Android 13+: allow the "now playing" notification (asked once; audio works either way).
+    val notifyLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { vm.toggleAudio() }
+    fun startWithNotificationCheck() {
+        val needsAsk = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
+            !vm.settings.askedNotifications
+        if (needsAsk) {
+            vm.settings.askedNotifications = true
+            notifyLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            vm.toggleAudio()
+        }
+    }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) vm.toggleAudio()
+        if (granted) startWithNotificationCheck()
     }
     // Which block the phone file picker is choosing for.
     var pickingFor by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -102,6 +122,7 @@ fun PlayerScreen(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Ampfield", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, contentDescription = "Settings") }
             TextButton(onClick = { showAbout = true }) { Text("About") }
             if (signedIn) TextButton(onClick = onSignOut) { Text("Sign out") }
         }
@@ -124,6 +145,17 @@ fun PlayerScreen(
             }
             OutlinedButton(onClick = onTuner, modifier = Modifier.height(48.dp)) { Text("Tuner") }
         }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val rec = vm.recordingSeconds
+            OutlinedButton(
+                onClick = vm::toggleRecording,
+                modifier = Modifier.weight(1f).height(48.dp),
+                colors = if (rec != null) ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                else ButtonDefaults.outlinedButtonColors(),
+            ) { Text(if (rec != null) "● Recording ${formatTime(rec)} · Stop" else "● Record") }
+            OutlinedButton(onClick = onLive, modifier = Modifier.height(48.dp)) { Text("Live mode") }
+        }
+        vm.lastRecording?.let { RecordingBanner(it, vm::dismissRecording) }
         if (vm.restoring) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
@@ -136,7 +168,8 @@ fun PlayerScreen(
             onClick = {
                 val hasMic = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
                     PackageManager.PERMISSION_GRANTED
-                if (vm.running || hasMic) vm.toggleAudio()
+                if (vm.running) vm.toggleAudio()
+                else if (hasMic) startWithNotificationCheck()
                 else permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
             },
             modifier = Modifier.fillMaxWidth().height(56.dp),
@@ -165,6 +198,7 @@ fun PlayerScreen(
                     onMove = { vm.move(block, it) },
                     onClear = { vm.clearBlock(block) },
                     onRemove = { vm.removeBlock(block) },
+                    onLevel = { vm.setBlockLevel(block, it) },
                 )
             }
         }
@@ -179,7 +213,16 @@ fun PlayerScreen(
         }
 
         Meter("Out", vm.outputLevelDb)
-        CpuMeter(vm.cpuLoad, vm.running)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CpuMeter(vm.cpuLoad, vm.running)
+            if (vm.running && vm.latencyMs > 0) {
+                Text(
+                    "  ·  delay ≈ ${vm.latencyMs} ms",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
 
         // Noise gate + EQ, like the NAM / TONE3000 plugin.
         Card(modifier = Modifier.fillMaxWidth()) {
@@ -277,6 +320,28 @@ private fun AddBlockSheet(onDismiss: () -> Unit, onPick: (BlockKind) -> Unit) {
     }
 }
 
+/** "Saved to Music/Ampfield" with a Share button. */
+@Composable
+private fun RecordingBanner(recording: Recording, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    Card(Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Recording saved (${formatTime(recording.seconds)})", style = MaterialTheme.typography.titleSmall)
+                Text("${recording.location}/${recording.name}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            recording.uri?.let { uri ->
+                TextButton(onClick = {
+                    val send = Intent(Intent.ACTION_SEND).setType("audio/wav").putExtra(Intent.EXTRA_STREAM, uri)
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    context.startActivity(Intent.createChooser(send, "Share recording"))
+                }) { Text("Share") }
+            }
+            IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, contentDescription = "Dismiss") }
+        }
+    }
+}
+
 @Composable
 private fun CpuMeter(load: Float, running: Boolean) {
     val pct = (load * 100).roundToInt()
@@ -311,6 +376,7 @@ private fun SignalBlock(
     onMove: (Int) -> Unit,
     onClear: () -> Unit,
     onRemove: () -> Unit,
+    onLevel: (Float) -> Unit,
 ) {
     val tone = block.tone
     var menuOpen by remember { mutableStateOf(false) }
@@ -382,6 +448,23 @@ private fun SignalBlock(
                 }
             }
 
+            if (!block.isEmpty) {
+                // How hard this block hits the next one (e.g. a boost into an amp).
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Level", style = MaterialTheme.typography.labelLarge, modifier = Modifier.width(48.dp))
+                    Slider(
+                        value = block.levelDb,
+                        onValueChange = { v -> onLevel(if (kotlin.math.abs(v) < 0.75f) 0f else v.roundToInt().toFloat()) },
+                        valueRange = -24f..12f,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        "${if (block.levelDb > 0) "+" else ""}${block.levelDb.roundToInt()} dB",
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.width(52.dp),
+                    )
+                }
+            }
             BrowseT3kButton(onClick = onBrowse, modifier = Modifier.fillMaxWidth(), fullLogo = true)
         }
     }

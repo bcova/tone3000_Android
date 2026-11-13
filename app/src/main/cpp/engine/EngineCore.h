@@ -3,7 +3,11 @@
 // EngineCore: the platform-independent signal chain.
 //
 //   guitar in -> input gain -> [gate listens] -> block 1 -> block 2 -> ...
-//            -> [gate turns down] -> EQ (bass/mid/treble) -> output gain -> out
+//            -> [gate turns down] -> EQ (bass/mid/treble) -> output gain -> out (L/R)
+//
+// The signal is mono until a stereo impulse response, which makes it stereo. A mono
+// block after that gets the (L+R)/2 mix. Optionally the EQ runs just before the
+// first impulse response (like the NAM plugin, where EQ comes before the cab).
 //
 // Each block is a NAM capture (.nam: pedal, amp, outboard...) or an impulse
 // response (.wav: cabinet, room...). Blocks are identified by an id chosen by the
@@ -22,6 +26,7 @@
 //   * Setters (gains, toggles) can be called from any thread.
 
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -30,6 +35,7 @@
 #include <vector>
 
 #include "Effects.h"
+#include "Recorder.h"
 #include "Tuner.h"
 
 namespace nam
@@ -64,6 +70,8 @@ public:
   // from the list keep their relative order after the listed ones.
   void setOrder(const std::vector<int64_t>& ids);
   void setBlockEnabled(int64_t id, bool enabled);
+  // Per-block volume trim in dB (e.g. how hard a pedal hits the amp). 0 = unchanged.
+  void setBlockLevelDb(int64_t id, float db);
 
   bool hasBlock(int64_t id) const;
   int blockCount() const;
@@ -88,6 +96,20 @@ public:
     mEqEnabled.store(enabled);
   }
 
+  // Put the EQ right before the first impulse response (cab) instead of at the end.
+  void setEqBeforeCab(bool before) { mEqBeforeCab.store(before); }
+
+  // Input calibration (like the NAM plugin): captures that store their recording level
+  // ("input_level_dbu") are fed as if your guitar hit the real amp. `interfaceDbu` is the
+  // level in dBu that reads 0 dBFS on your audio interface (see its spec sheet).
+  void setInputCalibration(bool enabled, float interfaceDbu)
+  {
+    mInterfaceDbu.store(interfaceDbu);
+    mCalibrate.store(enabled);
+  }
+
+  Recorder& recorder() { return mRecorder; }
+
   // ---- Tuner
   // While active, the output is muted (silent tuning) and recent input is kept for analysis.
   void setTunerActive(bool active) { mTunerActive.store(active); }
@@ -96,7 +118,9 @@ public:
   PitchResult readTunerPitch();
 
   // ---- Real-time (audio thread)
-  // Mono in, mono out. `in` and `out` may point to the same buffer.
+  // Mono in, stereo out.
+  void process(const float* in, float* outLeft, float* outRight, int numFrames);
+  // Convenience for tests: mono in, (L+R)/2 out. May allocate; not for the audio thread.
   void process(const float* in, float* out, int numFrames);
 
   // Peak levels (linear, 0..1+) since the last call. Used for the UI meters.
@@ -114,7 +138,11 @@ private:
   {
     std::unique_ptr<nam::DSP> dsp;
     float normalizeGain = 1.0f; // only for NAM captures
+    bool isIr = false; // .wav impulse response
+    float inputLevelDbu = NAN; // calibration level stored in the .nam file, if any
     std::atomic<bool> enabled{true};
+    std::atomic<float> levelGain{1.0f};
+    float appliedLevel = 1.0f; // audio-thread only (smoothed)
     std::vector<std::vector<float>> outBuffers; // one per DSP output channel
     std::vector<float*> outPtrs;
   };
@@ -127,7 +155,9 @@ private:
 
   void rebuildChainLocked();
   void waitForAudioThread();
-  static void runBlock(Block& block, float* buffer, int numFrames, bool normalize);
+  void runBlock(Block& block, float* left, float* right, bool& stereo, int numFrames, bool normalize, bool calibrate,
+                float interfaceDbu);
+  void runEq(float* left, float* right, bool stereo, int numFrames);
 
   const double mSampleRate;
 
@@ -155,7 +185,9 @@ private:
   // is safe to free a chain or block that was just swapped out.
   std::atomic<uint64_t> mProcessSeq{0};
 
-  std::vector<float> mScratch; // audio-thread work buffer
+  std::vector<float> mScratch; // audio-thread work buffer (left / mono)
+  std::vector<float> mScratchR; // audio-thread work buffer (right)
+  std::vector<float> mTestR; // used by the mono convenience process()
 
   // Gate + EQ: settings from any thread, state owned by the audio thread.
   std::atomic<bool> mGateEnabled{false};
@@ -166,6 +198,11 @@ private:
   std::atomic<float> mTreble{5.0f};
   NoiseGate mGate;
   ToneStack mToneStack;
+  ToneStack mToneStackR;
+  std::atomic<bool> mEqBeforeCab{false};
+  std::atomic<bool> mCalibrate{false};
+  std::atomic<float> mInterfaceDbu{12.0f};
+  Recorder mRecorder;
   std::vector<float> mGateGains;
   bool mGateWasOn = false;
   bool mEqWasOn = false;

@@ -22,6 +22,7 @@ data class LoadedTone(
 data class SavedBlock(
     val kind: String,
     val enabled: Boolean = true,
+    val levelDb: Float = 0f,
     val file: String? = null,
     val fileName: String? = null,
     val tone: LoadedTone? = null,

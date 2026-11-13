@@ -1,7 +1,9 @@
 // Desktop tests for EngineCore: load NAM example models and a generated IR,
 // push a guitar-like signal through, and check the output is sane and fast.
 
+#include <array>
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -96,6 +98,38 @@ static std::vector<float> sine(double freq, double amp, int frames)
   for (int i = 0; i < frames; ++i)
     v[i] = static_cast<float>(amp * std::sin(2 * M_PI * freq * i / kRate));
   return v;
+}
+
+
+// Writes a stereo 16-bit WAV IR whose left and right channels differ.
+static void writeStereoIr(const fs::path& path, int length, int sampleRate)
+{
+  std::mt19937 rng(9);
+  std::normal_distribution<float> noise(0.0f, 1.0f);
+  std::vector<int16_t> samples(length * 2);
+  for (int i = 0; i < length; ++i)
+  {
+    const float env = std::exp(-8.0f * i / length);
+    samples[i * 2] = static_cast<int16_t>(std::clamp((i == 0 ? 0.9f : 0.3f * noise(rng)) * env, -1.0f, 1.0f) * 32767);
+    samples[i * 2 + 1] = static_cast<int16_t>(std::clamp((i == 3 ? 0.6f : 0.2f * noise(rng)) * env, -1.0f, 1.0f) * 32767);
+  }
+  auto put32 = [](std::ofstream& f, uint32_t v) { f.write(reinterpret_cast<const char*>(&v), 4); };
+  auto put16 = [](std::ofstream& f, uint16_t v) { f.write(reinterpret_cast<const char*>(&v), 2); };
+  std::ofstream f(path, std::ios::binary);
+  const uint32_t dataBytes = static_cast<uint32_t>(samples.size() * 2);
+  f.write("RIFF", 4);
+  put32(f, 36 + dataBytes);
+  f.write("WAVEfmt ", 8);
+  put32(f, 16);
+  put16(f, 1);
+  put16(f, 2);
+  put32(f, static_cast<uint32_t>(sampleRate));
+  put32(f, static_cast<uint32_t>(sampleRate * 4));
+  put16(f, 4);
+  put16(f, 16);
+  f.write("data", 4);
+  put32(f, dataBytes);
+  f.write(reinterpret_cast<const char*>(samples.data()), dataBytes);
 }
 
 struct RunStats
@@ -362,6 +396,116 @@ int main()
     for (size_t pos = 0; pos + 256 <= a2.size(); pos += 256)
       core.process(a2.data() + pos, out.data(), 256);
     CHECK(std::fabs(out[100]) > 0.0f, "sound returns after tuning");
+  }
+
+  std::printf("10) Stereo, block level, calibration, EQ position, recording\n");
+  {
+    writeStereoIr(tmp / "stereo.wav", 1024, 48000);
+    std::vector<float> L(256), R(256);
+    auto render = [&](EngineCore& core, const std::vector<float>& sig) {
+      double diff = 0, energyL = 0, energyR = 0;
+      for (size_t pos = 0; pos + 256 <= sig.size(); pos += 256)
+      {
+        core.process(sig.data() + pos, L.data(), R.data(), 256);
+        for (int i = 0; i < 256; ++i)
+        {
+          diff += std::fabs(L[i] - R[i]);
+          energyL += L[i] * L[i];
+          energyR += R[i] * R[i];
+        }
+      }
+      return std::array<double, 3>{diff, energyL, energyR};
+    };
+    {
+      EngineCore core(kRate);
+      CHECK(core.loadBlock(1, (tmp / "stereo.wav").string()).empty(), "load stereo IR");
+      auto r = render(core, input);
+      CHECK(r[0] > 1.0 && r[1] > 0 && r[2] > 0, "stereo IR gives different left and right");
+    }
+    {
+      EngineCore core(kRate);
+      CHECK(core.loadBlock(1, (tmp / "cab.wav").string()).empty(), "load mono IR");
+      CHECK(render(core, input)[0] == 0.0, "mono IR gives identical left and right");
+      // A NAM block after a stereo IR gets the mix and makes it mono again.
+      CHECK(core.loadBlock(2, (tmp / "stereo.wav").string()).empty(), "load");
+      CHECK(core.loadBlock(3, (models / "lstm.nam").string()).empty(), "load");
+      core.setOrder({2, 3});
+      auto r = render(core, input);
+      CHECK(r[0] == 0.0 && r[1] > 0, "mono block after stereo IR is mono and audible");
+    }
+    {
+      EngineCore core(kRate);
+      core.setNormalize(false);
+      CHECK(core.loadBlock(1, (tmp / "cab.wav").string()).empty(), "load");
+      const double base = renderDb(core, input);
+      core.setBlockLevelDb(1, -6.0f);
+      const double trimmed = renderDb(core, input);
+      std::printf("   block level -6 dB: %.2f dB change\n", trimmed - base);
+      CHECK(std::fabs((trimmed - base) + 6.0) < 0.2, "block level trims by 6 dB");
+    }
+    {
+      // lstm.nam was captured at 18.3 dBu. With a 12 dBu interface, calibration
+      // turns the signal into the capture down by 6.3 dB; the IR in front is unaffected.
+      const auto quiet = sine(110.0, 0.05, static_cast<int>(kRate));
+      EngineCore off(kRate), on(kRate);
+      for (EngineCore* core : {&off, &on})
+      {
+        core->setNormalize(false);
+        CHECK(core->loadBlock(1, (models / "lstm.nam").string()).empty(), "load");
+      }
+      on.setInputCalibration(true, 12.0f);
+      const double dOff = renderDb(off, quiet), dOn = renderDb(on, quiet);
+      std::printf("   calibration (12 dBu interface, 18.3 dBu capture): %.2f -> %.2f dB\n", dOff, dOn);
+      CHECK(dOn < dOff - 1.0, "calibration lowers the drive into a hotter capture");
+    }
+    {
+      EngineCore after(kRate), before(kRate);
+      for (EngineCore* core : {&after, &before})
+      {
+        CHECK(core->loadBlock(1, (models / "lstm.nam").string()).empty(), "load amp");
+        CHECK(core->loadBlock(2, (tmp / "cab.wav").string()).empty(), "load cab");
+        core->setEq(true, 10, 5, 0);
+      }
+      before.setEqBeforeCab(true);
+      std::vector<float> a(input.size()), b(input.size());
+      for (size_t pos = 0; pos + 256 <= input.size(); pos += 256)
+      {
+        after.process(input.data() + pos, a.data() + pos, 256);
+        before.process(input.data() + pos, b.data() + pos, 256);
+      }
+      double diff = 0;
+      bool finite = true;
+      for (size_t i = 0; i < a.size(); ++i)
+      {
+        diff += std::fabs(a[i] - b[i]);
+        finite = finite && std::isfinite(a[i]) && std::isfinite(b[i]);
+      }
+      CHECK(finite, "EQ before/after cab stays finite");
+      // Linear filters commute, so with a linear cab the two orders match closely.
+      CHECK(diff / a.size() < 1e-3, "EQ before cab equals EQ after cab for linear blocks");
+    }
+    {
+      EngineCore core(kRate);
+      CHECK(core.loadBlock(1, (tmp / "stereo.wav").string()).empty(), "load");
+      const fs::path wav = tmp / "take.wav";
+      CHECK(core.recorder().start(wav.string()).empty(), "start recording");
+      const int frames = static_cast<int>(kRate); // 1 second
+      for (int pos = 0; pos + 480 <= frames; pos += 480)
+        core.process(input.data() + pos, L.data(), R.data(), 240), core.process(input.data() + pos + 240, L.data(), R.data(), 240);
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      const double secs = core.recorder().stop();
+      std::printf("   recorded %.3f s, %llu dropped\n", secs, (unsigned long long)core.recorder().droppedFrames());
+      CHECK(std::fabs(secs - 1.0) < 0.01, "recording length matches");
+      CHECK(core.recorder().droppedFrames() == 0, "no frames dropped");
+      std::ifstream f(wav, std::ios::binary | std::ios::ate);
+      const auto size = static_cast<long long>(f.tellg());
+      CHECK(size == 44 + static_cast<long long>(secs * kRate + 0.5) * 4, "WAV file size matches header");
+      f.seekg(0);
+      char riff[4];
+      f.read(riff, 4);
+      CHECK(std::string(riff, 4) == "RIFF", "valid WAV header");
+      CHECK(!core.recorder().recording(), "stopped");
+    }
   }
 
   fs::remove_all(tmp);

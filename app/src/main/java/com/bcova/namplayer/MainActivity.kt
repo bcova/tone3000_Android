@@ -2,11 +2,13 @@ package com.bcova.namplayer
 
 import android.content.Intent
 import android.os.Bundle
+import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import com.bcova.namplayer.audio.PedalController
 import com.bcova.namplayer.t3k.AuthCallback
 import com.bcova.namplayer.ui.AppRoot
 import com.bcova.namplayer.ui.AmpfieldTheme
@@ -34,6 +36,12 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIntent(intent)
+    }
+
+    // Page-turner footswitches type keys (Page Down, arrows…). Mapped keys control the rig.
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (event.repeatCount == 0 && PedalController.get(this).onKey(keyCode)) return true
+        return super.onKeyDown(keyCode, event)
     }
 
     private fun handleIntent(intent: Intent?) {

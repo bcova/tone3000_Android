@@ -66,8 +66,10 @@ EngineCore::EngineCore(double sampleRate)
 : mSampleRate(sampleRate)
 , mChain(new Chain())
 , mScratch(kMaxFrames, 0.0f)
+, mScratchR(kMaxFrames, 0.0f)
 , mGateGains(kMaxFrames, 1.0f)
 , mTunerRing(new std::atomic<float>[kTunerRing]())
+, mRecorder(sampleRate)
 {
   mGate.prepare(sampleRate);
 }
@@ -124,6 +126,9 @@ std::string EngineCore::loadBlock(int64_t id, const std::string& path)
   block->outBuffers.assign(dsp.NumOutputChannels(), std::vector<float>(kMaxFrames, 0.0f));
   for (auto& b : block->outBuffers)
     block->outPtrs.push_back(b.data());
+  block->isIr = ext == ".wav";
+  if (!block->isIr && dsp.HasInputLevel())
+    block->inputLevelDbu = static_cast<float>(dsp.GetInputLevel());
   if (ext == ".nam" && dsp.HasLoudness())
     block->normalizeGain = static_cast<float>(std::pow(10.0, (kTargetLoudnessDb - dsp.GetLoudness()) / 20.0));
 
@@ -132,6 +137,8 @@ std::string EngineCore::loadBlock(int64_t id, const std::string& path)
   if (it != mBlocks.end())
   {
     block->enabled.store(it->second->enabled.load()); // replacing keeps on/off state
+    block->levelGain.store(it->second->levelGain.load()); // ...and its level
+    block->appliedLevel = block->levelGain.load();
     mRetired.push_back(it->second);
     it->second = block;
   }
@@ -179,6 +186,14 @@ void EngineCore::setBlockEnabled(int64_t id, bool enabled)
   auto it = mBlocks.find(id);
   if (it != mBlocks.end())
     it->second->enabled.store(enabled);
+}
+
+void EngineCore::setBlockLevelDb(int64_t id, float db)
+{
+  std::lock_guard<std::mutex> lock(mEditMutex);
+  auto it = mBlocks.find(id);
+  if (it != mBlocks.end())
+    it->second->levelGain.store(dbToGain(db));
 }
 
 bool EngineCore::hasBlock(int64_t id) const
@@ -233,18 +248,60 @@ PitchResult EngineCore::readTunerPitch()
   return detectPitch(window.data(), kTunerWindow, mSampleRate);
 }
 
-void EngineCore::runBlock(Block& block, float* buffer, int numFrames, bool normalize)
+void EngineCore::runBlock(Block& block, float* left, float* right, bool& stereo, int numFrames, bool normalize,
+                          bool calibrate, float interfaceDbu)
 {
-  float* inPtr = buffer;
+  // NAM blocks take one input: mix a stereo signal down first.
+  if (stereo)
+    for (int i = 0; i < numFrames; ++i)
+      left[i] = 0.5f * (left[i] + right[i]);
+
+  // Input calibration: feed the capture as if your guitar hit the real gear.
+  if (calibrate && !std::isnan(block.inputLevelDbu))
+  {
+    const float g = dbToGain(interfaceDbu - block.inputLevelDbu);
+    for (int i = 0; i < numFrames; ++i)
+      left[i] *= g;
+  }
+
+  float* inPtr = left;
   block.dsp->process(&inPtr, block.outPtrs.data(), numFrames);
-  // Use the first output channel (stereo IRs: left).
-  const float* out = block.outPtrs[0];
-  const float gain = normalize ? block.normalizeGain : 1.0f;
+
+  // Output: loudness normalization (NAM) and the block's level, ramped to avoid clicks.
+  const float base = normalize ? block.normalizeGain : 1.0f;
+  const float target = block.levelGain.load(std::memory_order_relaxed);
+  const float step = (target - block.appliedLevel) / static_cast<float>(numFrames);
+  const bool twoOut = block.outPtrs.size() >= 2;
+  const float* outL = block.outPtrs[0];
+  const float* outR = twoOut ? block.outPtrs[1] : outL;
+  float level = block.appliedLevel;
   for (int i = 0; i < numFrames; ++i)
-    buffer[i] = out[i] * gain;
+  {
+    level += step;
+    left[i] = outL[i] * base * level;
+    right[i] = outR[i] * base * level;
+  }
+  block.appliedLevel = target;
+  stereo = twoOut;
+}
+
+void EngineCore::runEq(float* left, float* right, bool stereo, int numFrames)
+{
+  mToneStack.process(left, numFrames);
+  if (stereo)
+    mToneStackR.process(right, numFrames);
 }
 
 void EngineCore::process(const float* in, float* out, int numFrames)
+{
+  if (static_cast<int>(mTestR.size()) < numFrames)
+    mTestR.resize(numFrames);
+  process(in, out, mTestR.data(), numFrames);
+  for (int i = 0; i < numFrames; ++i)
+    out[i] = 0.5f * (out[i] + mTestR[i]);
+}
+
+void EngineCore::process(const float* in, float* outLeft, float* outRight, int numFrames)
 {
   mProcessSeq.fetch_add(1); // now odd: "audio thread busy"
   const auto start = std::chrono::steady_clock::now();
@@ -262,7 +319,8 @@ void EngineCore::process(const float* in, float* out, int numFrames)
       peak = std::max(peak, std::fabs(in[i]));
     }
     mTunerWrite.store(w, std::memory_order_release);
-    std::fill(out, out + numFrames, 0.0f);
+    std::fill(outLeft, outLeft + numFrames, 0.0f);
+    std::fill(outRight, outRight + numFrames, 0.0f);
     updateMax(mInputPeak, peak);
     mProcessSeq.fetch_add(1);
     return;
@@ -270,6 +328,8 @@ void EngineCore::process(const float* in, float* out, int numFrames)
 
   const Chain* chain = mChain.load();
   const bool normalize = mNormalize.load(std::memory_order_relaxed);
+  const bool calibrate = mCalibrate.load(std::memory_order_relaxed);
+  const float interfaceDbu = mInterfaceDbu.load(std::memory_order_relaxed);
   const float inTarget = mInputGainTarget.load(std::memory_order_relaxed);
   const float outTarget = mOutputGainTarget.load(std::memory_order_relaxed);
 
@@ -283,6 +343,7 @@ void EngineCore::process(const float* in, float* out, int numFrames)
   mGateWasOn = gateOn;
 
   const bool eqOn = mEqEnabled.load(std::memory_order_relaxed);
+  const bool eqBeforeCab = mEqBeforeCab.load(std::memory_order_relaxed);
   if (eqOn)
   {
     const float b = mBass.load(std::memory_order_relaxed);
@@ -291,22 +352,28 @@ void EngineCore::process(const float* in, float* out, int numFrames)
     if (b != mAppliedBass || m != mAppliedMiddle || t != mAppliedTreble)
     {
       mToneStack.setKnobs(mSampleRate, b, m, t); // a few cos/pow calls: fine on the audio thread
+      mToneStackR.setKnobs(mSampleRate, b, m, t);
       mAppliedBass = b;
       mAppliedMiddle = m;
       mAppliedTreble = t;
     }
     if (!mEqWasOn)
+    {
       mToneStack.reset();
+      mToneStackR.reset();
+    }
   }
   mEqWasOn = eqOn;
 
   float inPeak = 0.0f;
   float outPeak = 0.0f;
-  float* buf = mScratch.data();
+  float* bufL = mScratch.data();
+  float* bufR = mScratchR.data();
 
   for (int offset = 0; offset < numFrames; offset += kMaxFrames)
   {
     const int n = std::min(kMaxFrames, numFrames - offset);
+    bool stereo = false;
 
     // Ramp gains across the chunk so slider moves don't "zipper".
     const float inStep = (inTarget - mInputGain) / static_cast<float>(n);
@@ -315,34 +382,54 @@ void EngineCore::process(const float* in, float* out, int numFrames)
       mInputGain += inStep;
       const float s = in[offset + i] * mInputGain;
       inPeak = std::max(inPeak, std::fabs(s));
-      buf[i] = s;
+      bufL[i] = s;
     }
     mInputGain = inTarget;
 
     if (gateOn)
-      mGate.detect(buf, mGateGains.data(), n); // listen to the guitar before the chain
+      mGate.detect(bufL, mGateGains.data(), n); // listen to the guitar before the chain
 
+    bool eqDone = !eqOn;
     for (Block* block : chain->blocks)
-      if (block->enabled.load(std::memory_order_relaxed))
-        runBlock(*block, buf, n, normalize);
+    {
+      if (!block->enabled.load(std::memory_order_relaxed))
+        continue;
+      if (!eqDone && eqBeforeCab && block->isIr)
+      {
+        runEq(bufL, bufR, stereo, n);
+        eqDone = true;
+      }
+      runBlock(*block, bufL, bufR, stereo, n, normalize, calibrate, interfaceDbu);
+    }
 
+    if (!stereo)
+      std::copy_n(bufL, n, bufR);
     if (gateOn)
-      NoiseGate::apply(buf, mGateGains.data(), n);
-    if (eqOn)
-      mToneStack.process(buf, n);
+    {
+      NoiseGate::apply(bufL, mGateGains.data(), n);
+      NoiseGate::apply(bufR, mGateGains.data(), n);
+    }
+    if (!eqDone)
+      runEq(bufL, bufR, true, n);
 
     const float outStep = (outTarget - mOutputGain) / static_cast<float>(n);
     for (int i = 0; i < n; ++i)
     {
       mOutputGain += outStep;
-      float s = buf[i] * mOutputGain;
-      if (!std::isfinite(s))
-        s = 0.0f;
-      s = std::clamp(s, -1.0f, 1.0f); // protect ears and speakers
-      outPeak = std::max(outPeak, std::fabs(s));
-      out[offset + i] = s;
+      float l = bufL[i] * mOutputGain;
+      float r = bufR[i] * mOutputGain;
+      if (!std::isfinite(l))
+        l = 0.0f;
+      if (!std::isfinite(r))
+        r = 0.0f;
+      l = std::clamp(l, -1.0f, 1.0f); // protect ears and speakers
+      r = std::clamp(r, -1.0f, 1.0f);
+      outPeak = std::max(outPeak, std::max(std::fabs(l), std::fabs(r)));
+      outLeft[offset + i] = l;
+      outRight[offset + i] = r;
     }
     mOutputGain = outTarget;
+    mRecorder.push(outLeft + offset, outRight + offset, n);
   }
 
   updateMax(mInputPeak, inPeak);

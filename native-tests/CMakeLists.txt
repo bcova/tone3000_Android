@@ -17,6 +17,7 @@ find_package(Threads REQUIRED)
 add_executable(engine_test
   engine_test.cpp
   ${REPO_ROOT}/app/src/main/cpp/engine/EngineCore.cpp
+  ${REPO_ROOT}/app/src/main/cpp/engine/Recorder.cpp
 )
 target_include_directories(engine_test PRIVATE ${REPO_ROOT}/app/src/main/cpp/engine)
 target_link_libraries(engine_test PRIVATE nam_core Threads::Threads)

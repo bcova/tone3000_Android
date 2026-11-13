@@ -33,6 +33,25 @@ object NativeAudio {
     /** EQ knobs 0..10, 5 = flat (like the NAM plugin's tone stack). */
     external fun setEq(enabled: Boolean, bass: Float, middle: Float, treble: Float)
 
+    /** Audio devices (AudioDeviceInfo ids, 0 = automatic). Restarts audio if running. */
+    external fun setDevices(inputId: Int, outputId: Int)
+    /** Output buffer in bursts: 1 = lowest latency, 2 = normal, 4 = safest. */
+    external fun setBufferBursts(bursts: Int)
+    /** Estimated guitar-to-headphones delay in ms, or -1. */
+    external fun roundTripLatencyMs(): Int
+
+    external fun setBlockLevelDb(id: Long, db: Float)
+    external fun setEqBeforeCab(before: Boolean)
+    /** Like the NAM plugin's input calibration. [interfaceDbu] = dBu that reads 0 dBFS on your interface. */
+    external fun setInputCalibration(enabled: Boolean, interfaceDbu: Float)
+
+    /** Records the output to a 16-bit stereo WAV. Returns null or an error. */
+    external fun startRecording(path: String): String?
+    /** Returns the recorded length in seconds. */
+    external fun stopRecording(): Double
+    /** Seconds recorded so far, or -1 when not recording. */
+    external fun recordingSeconds(): Double
+
     /** Tuner mode: mutes the output and analyzes the input. */
     external fun setTunerActive(active: Boolean)
     /** [hz, clarity]. hz = 0 when there's no clear note. Call off the main thread. */

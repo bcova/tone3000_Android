@@ -39,6 +39,8 @@ sealed interface Screen {
     data class ToneDetail(val toneId: String, val target: BlockTarget) : Screen
     data class Search(val target: BlockTarget) : Screen
     data object Tuner : Screen
+    data object Settings : Screen
+    data object Live : Screen
 }
 
 /** Which list the tag/make picker is showing. */

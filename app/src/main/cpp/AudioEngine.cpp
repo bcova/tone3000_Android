@@ -94,6 +94,51 @@ bool AudioEngine::isRunning() const
   return mWantRunning;
 }
 
+void AudioEngine::setDevices(int inputId, int outputId)
+{
+  std::lock_guard<std::mutex> lock(mLock);
+  if (inputId == mInputDeviceId && outputId == mOutputDeviceId)
+    return;
+  mInputDeviceId = inputId;
+  mOutputDeviceId = outputId;
+  restartLocked();
+}
+
+void AudioEngine::setBufferBursts(int bursts)
+{
+  std::lock_guard<std::mutex> lock(mLock);
+  mBufferBursts = std::clamp(bursts, 1, 8);
+  if (mOutput)
+    mOutput->setBufferSizeInFrames(mOutput->getFramesPerBurst() * mBufferBursts); // no restart needed
+}
+
+void AudioEngine::restartLocked()
+{
+  if (!mWantRunning)
+    return;
+  closeStreams();
+  if (openStreams() != oboe::Result::OK || mDuplex->start() != oboe::Result::OK)
+  {
+    closeStreams();
+    mWantRunning = false;
+    mLastError = "Audio failed to start on the chosen device.";
+  }
+}
+
+int AudioEngine::roundTripLatencyMs() const
+{
+  std::lock_guard<std::mutex> lock(mLock);
+  if (!mOutput || !mInput)
+    return -1;
+  auto out = mOutput->calculateLatencyMillis();
+  auto in = mInput->calculateLatencyMillis();
+  if (!out)
+    return -1;
+  // Input latency isn't always reported; estimate it as one input burst if missing.
+  const double inMs = in ? in.value() : 1000.0 * mInput->getFramesPerBurst() / mInput->getSampleRate();
+  return static_cast<int>(out.value() + inMs + 0.5);
+}
+
 std::string AudioEngine::statusText() const
 {
   std::lock_guard<std::mutex> lock(mLock);
@@ -107,9 +152,7 @@ std::string AudioEngine::statusText() const
   std::string text = std::to_string(mOutput->getSampleRate()) + " Hz · "
                      + std::to_string(mOutput->getFramesPerBurst()) + "-frame bursts · "
                      + (exclusive ? "exclusive" : "shared") + (lowLatency ? "" : " · NOT low-latency");
-  auto latency = mOutput->calculateLatencyMillis();
-  if (latency)
-    text += " · out " + std::to_string(static_cast<int>(latency.value())) + " ms";
+  text += " · buffer x" + std::to_string(mBufferBursts);
   return text;
 }
 
@@ -123,13 +166,14 @@ oboe::Result AudioEngine::openStreams()
     ->setFormat(oboe::AudioFormat::Float)
     ->setChannelCount(oboe::ChannelCount::Stereo)
     ->setSampleRate(kSampleRate)
+    ->setDeviceId(mOutputDeviceId)
     ->setDataCallback(mDuplex)
     ->setErrorCallback(mErrorHandler);
   oboe::Result result = outBuilder.openStream(mOutput);
   if (result != oboe::Result::OK)
     return result;
-  // Smallest safe buffer: two bursts.
-  mOutput->setBufferSizeInFrames(mOutput->getFramesPerBurst() * 2);
+  // Buffer size in bursts: smaller = less delay, bigger = fewer crackles.
+  mOutput->setBufferSizeInFrames(mOutput->getFramesPerBurst() * mBufferBursts);
 
   // Input: "Unprocessed" turns off the phone's voice processing (auto-gain,
   // noise suppression), which would wreck a guitar signal.
@@ -141,6 +185,7 @@ oboe::Result AudioEngine::openStreams()
     ->setChannelCount(oboe::ChannelCount::Mono)
     ->setSampleRate(mOutput->getSampleRate())
     ->setBufferCapacityInFrames(mOutput->getBufferCapacityInFrames() * 2)
+    ->setDeviceId(mInputDeviceId)
     ->setInputPreset(oboe::InputPreset::Unprocessed);
   result = inBuilder.openStream(mInput);
   if (result != oboe::Result::OK)
@@ -154,6 +199,8 @@ oboe::Result AudioEngine::openStreams()
     return result;
 
   mMono.assign(static_cast<size_t>(mOutput->getBufferCapacityInFrames()), 0.0f);
+  mLeft.assign(mMono.size(), 0.0f);
+  mRight.assign(mMono.size(), 0.0f);
   mOutChannels = mOutput->getChannelCount();
   mDuplex->setSharedInputStream(mInput);
   mDuplex->setSharedOutputStream(mOutput);
@@ -208,13 +255,25 @@ oboe::DataCallbackResult AudioEngine::render(const float* input, int numInputFra
   std::copy_n(input, fromInput, mMono.data());
   std::fill(mMono.begin() + fromInput, mMono.begin() + frames, 0.0f);
 
-  mCore->process(mMono.data(), mMono.data(), frames);
+  mCore->process(mMono.data(), mLeft.data(), mRight.data(), frames);
 
-  // Same signal to both ears.
+  // Interleave L/R (mono devices get the mix).
   const int outChannels = mOutChannels;
-  for (int i = 0; i < frames; ++i)
-    for (int c = 0; c < outChannels; ++c)
-      output[i * outChannels + c] = mMono[i];
+  if (outChannels >= 2)
+  {
+    for (int i = 0; i < frames; ++i)
+    {
+      output[i * outChannels] = mLeft[i];
+      output[i * outChannels + 1] = mRight[i];
+      for (int c = 2; c < outChannels; ++c)
+        output[i * outChannels + c] = 0.0f;
+    }
+  }
+  else
+  {
+    for (int i = 0; i < frames; ++i)
+      output[i] = 0.5f * (mLeft[i] + mRight[i]);
+  }
   for (int i = frames * outChannels; i < numOutputFrames * outChannels; ++i)
     output[i] = 0.0f;
 

@@ -22,6 +22,23 @@ the app's private storage, so presets work offline. Copies that nothing uses are
 
 **Tuner** (button at the top): a chromatic tuner, A4 = 440 Hz. The sound is muted while it's open.
 
+**Record** saves what you hear as a stereo WAV in **Music/Ampfield**, with a Share button.
+**Live mode** has big buttons: previous/next preset, a preset grid, block on/off tiles, tuner, record.
+
+**Background playing:** while audio is on, a "now playing" notification keeps Ampfield running when you
+switch apps or lock the screen.
+
+**Each block has a Level slider** (−24 to +12 dB), e.g. to set how hard a boost pedal hits the amp.
+Stereo IRs (cabs, rooms) play in stereo.
+
+**Settings** (gear icon):
+- **Audio devices:** pick the input and output, or leave it on Automatic. Bluetooth audio is flagged as high-delay.
+- **Latency:** Lowest / Normal / Safe buffer, with the measured delay in ms.
+- **Input calibration:** like the NAM plugin. Set your interface's max input level (dBu), and calibrated captures react like the real gear.
+- **EQ position:** before the cab (like the NAM plugin) or at the end.
+- **Footswitch & MIDI:** USB/Bluetooth MIDI pedals and page-turner pedals. Program Change N picks preset N.
+  Tap **Learn** next to an action (next/previous preset, tuner, record, block 1–6, gate), then press a pedal.
+
 Tap **Add block** to add a Pedal, Amp, Cab, Outboard, Space or Any block. Use a block's **⋮** menu
 to move it up or down, empty it, or remove it. Watch the **CPU** meter: near 100%, the audio crackles.
 
@@ -103,6 +120,8 @@ Never commit the key: `*.jks`, `*.keystore` and `keystore.properties` are alread
 
 | Path | What it does |
 |---|---|
+| `app/src/main/cpp/engine/Recorder.*` | Lock-free recording to WAV (audio thread to writer thread). |
+| `app/src/main/cpp/engine/Tuner.h` | YIN pitch detection for the tuner. |
 | `app/src/main/cpp/engine/Effects.h` | Noise gate and bass/mid/treble EQ (NAM-plugin curves). |
 | `app/src/main/cpp/engine/EngineCore.*` | The signal chain: gains, NAM model, IR, meters. Plain C++, so it can be tested on a computer. |
 | `app/src/main/cpp/AudioEngine.*` | Connects the phone's audio hardware ([Oboe](https://github.com/google/oboe)) to the engine. Restarts automatically when you plug or unplug a device. |

@@ -5,15 +5,24 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.bcova.namplayer.audio.AudioService
+import com.bcova.namplayer.audio.Devices
 import com.bcova.namplayer.audio.NativeAudio
+import com.bcova.namplayer.audio.PedalController
+import com.bcova.namplayer.rig.AppSettings
+import com.bcova.namplayer.rig.DeviceChoice
+import com.bcova.namplayer.rig.PedalAction
 import com.bcova.namplayer.rig.LoadedTone
 import com.bcova.namplayer.rig.Preset
+import com.bcova.namplayer.rig.Recording
+import com.bcova.namplayer.rig.Recordings
 import com.bcova.namplayer.rig.RigState
 import com.bcova.namplayer.rig.RigStore
 import com.bcova.namplayer.rig.SavedBlock
@@ -43,6 +52,7 @@ class ChainBlock(val id: Long, val kind: BlockKind) {
     var file by mutableStateOf<String?>(null) // name inside the tone library
     var tone by mutableStateOf<LoadedTone?>(null) // null when loaded from a phone file
     var enabled by mutableStateOf(true)
+    var levelDb by mutableFloatStateOf(0f)
     var loading by mutableStateOf(false)
     val isEmpty: Boolean get() = fileName == null
 }
@@ -51,6 +61,32 @@ class ChainBlock(val id: Long, val kind: BlockKind) {
 class AmpViewModel(app: Application) : AndroidViewModel(app) {
 
     private val store = RigStore(app.filesDir)
+    val settings = AppSettings(app)
+
+    // ---- App settings (not part of presets)
+    var bufferBursts by mutableIntStateOf(settings.bufferBursts)
+        private set
+    var calibrate by mutableStateOf(settings.calibrate)
+        private set
+    var interfaceDbu by mutableFloatStateOf(settings.interfaceDbu)
+        private set
+    var eqBeforeCab by mutableStateOf(settings.eqBeforeCab)
+        private set
+    var inputDevice by mutableStateOf(settings.inputDevice)
+        private set
+    var outputDevice by mutableStateOf(settings.outputDevice)
+        private set
+    /** Guitar-to-headphones delay in ms, or -1 if unknown. */
+    var latencyMs by mutableIntStateOf(-1)
+        private set
+
+    // ---- Recording
+    /** Seconds recorded so far, or null when not recording. */
+    var recordingSeconds by mutableStateOf<Double?>(null)
+        private set
+    /** The last finished recording, for the Share button. */
+    var lastRecording by mutableStateOf<Recording?>(null)
+        private set
     /** Rig changes (loading, presets) happen one at a time. */
     private val rigLock = Mutex()
 
@@ -114,21 +150,74 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
     private var meterJob: Job? = null
 
     init {
+        NativeAudio.setBufferBursts(bufferBursts)
+        NativeAudio.setInputCalibration(calibrate, interfaceDbu)
+        NativeAudio.setEqBeforeCab(eqBeforeCab)
         viewModelScope.launch { restoreLastSession() }
+        viewModelScope.launch(Dispatchers.IO) { cleanDownloadCache() }
+        listenToPedals()
+    }
+
+    // ---- Settings
+
+    fun updateBufferBursts(bursts: Int) {
+        bufferBursts = bursts
+        settings.bufferBursts = bursts
+        NativeAudio.setBufferBursts(bursts)
+    }
+
+    fun updateCalibration(enabled: Boolean = calibrate, dbu: Float = interfaceDbu) {
+        calibrate = enabled
+        interfaceDbu = dbu
+        settings.calibrate = enabled
+        settings.interfaceDbu = dbu
+        NativeAudio.setInputCalibration(enabled, dbu)
+    }
+
+    fun updateEqBeforeCab(before: Boolean) {
+        eqBeforeCab = before
+        settings.eqBeforeCab = before
+        NativeAudio.setEqBeforeCab(before)
+    }
+
+    fun chooseDevices(input: DeviceChoice?, output: DeviceChoice?) {
+        inputDevice = input
+        outputDevice = output
+        settings.inputDevice = input
+        settings.outputDevice = output
+        applyDevices()
+    }
+
+    /** Looks up the remembered devices (ids change when replugged) and tells the engine. */
+    fun applyDevices() {
+        val app = getApplication<Application>()
+        NativeAudio.setDevices(Devices.resolve(app, inputDevice, inputs = true), Devices.resolve(app, outputDevice, inputs = false))
+    }
+
+    /** Old TONE3000 downloads: once loaded, tones live in the library, so the download cache can go. */
+    private fun cleanDownloadCache() {
+        File(getApplication<Application>().cacheDir, "t3k").listFiles()?.forEach { it.delete() }
+        File(getApplication<Application>().cacheDir, "import").listFiles()?.forEach { it.delete() }
     }
 
     // ---- Audio on/off and controls
 
     fun toggleAudio() {
         if (running) {
+            if (recordingSeconds != null) stopRecording()
             NativeAudio.stop()
+            AudioService.stop(getApplication())
             running = false
             meterJob?.cancel()
             resetMeters()
         } else {
+            applyDevices()
             running = NativeAudio.start()
             if (!running) message = NativeAudio.statusText()
-            if (running) startMeters()
+            if (running) {
+                AudioService.start(getApplication()) // keep playing in the background
+                startMeters()
+            }
         }
         status = NativeAudio.statusText()
     }
@@ -215,6 +304,7 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
         block.file = null
         block.tone = null
         block.enabled = true
+        block.levelDb = 0f
     }
 
     fun move(block: ChainBlock, delta: Int) {
@@ -224,6 +314,11 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
         blocks.removeAt(from)
         blocks.add(to, block)
         pushOrder()
+    }
+
+    fun setBlockLevel(block: ChainBlock, db: Float) {
+        block.levelDb = db
+        NativeAudio.setBlockLevelDb(block.id, db)
     }
 
     fun setEnabled(block: ChainBlock, enabled: Boolean) {
@@ -258,6 +353,7 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
                 block.file = stored.name
                 block.tone = tone
                 NativeAudio.setBlockEnabled(block.id, block.enabled)
+                NativeAudio.setBlockLevelDb(block.id, block.levelDb)
                 pushOrder() // a newly loaded block goes where it sits in the list
             }
             return error
@@ -306,7 +402,7 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The current sound as plain data. */
     fun snapshot(): RigState = RigState(
-        blocks = blocks.map { SavedBlock(it.kind.name, it.enabled, it.file, it.fileName, it.tone) },
+        blocks = blocks.map { SavedBlock(it.kind.name, it.enabled, it.levelDb, it.file, it.fileName, it.tone) },
         inputGainDb = inputGainDb,
         outputGainDb = outputGainDb,
         normalize = normalize,
@@ -335,7 +431,10 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
         var missing = 0
         for (saved in rig.blocks.take(MAX_BLOCKS)) {
             val kind = runCatching { BlockKind.valueOf(saved.kind) }.getOrDefault(BlockKind.ANY)
-            val block = ChainBlock(nextId++, kind).apply { enabled = saved.enabled }
+            val block = ChainBlock(nextId++, kind).apply {
+                enabled = saved.enabled
+                levelDb = saved.levelDb
+            }
             blocks += block
             val name = saved.file ?: continue
             val file = store.libraryFile(name)
@@ -417,6 +516,72 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) { store.savePresets(copy) }
     }
 
+    // ---- Recording
+
+    fun toggleRecording() = if (recordingSeconds != null) stopRecording() else startRecording()
+
+    fun startRecording() {
+        if (!running) {
+            message = "Start audio first, then record."
+            return
+        }
+        val stamp = java.text.SimpleDateFormat("yyyy-MM-dd HH-mm-ss", java.util.Locale.US).format(java.util.Date())
+        val file = File(getApplication<Application>().cacheDir, "rec/Ampfield $stamp.wav").apply { parentFile?.mkdirs() }
+        NativeAudio.startRecording(file.path)?.let { message = it; return }
+        pendingRecording = file
+        recordingSeconds = 0.0
+    }
+
+    private var pendingRecording: File? = null
+
+    fun stopRecording() {
+        val file = pendingRecording ?: return
+        pendingRecording = null
+        val seconds = NativeAudio.stopRecording()
+        recordingSeconds = null
+        viewModelScope.launch {
+            val saved = withContext(Dispatchers.IO) { runCatching { Recordings.publish(getApplication(), file, seconds) } }
+            saved.onSuccess { lastRecording = it }.onFailure { message = "Couldn't save the recording: ${it.message}" }
+        }
+    }
+
+    fun dismissRecording() {
+        lastRecording = null
+    }
+
+    // ---- Footswitch / MIDI
+
+    private fun listenToPedals() {
+        val pedals = PedalController.get(getApplication())
+        viewModelScope.launch { pedals.actions.collect(::handlePedal) }
+        viewModelScope.launch {
+            // MIDI Program Change N -> preset N (in list order).
+            pedals.programs.collect { n -> presets.getOrNull(n)?.let(::loadPreset) }
+        }
+    }
+
+    private fun handlePedal(action: PedalAction) {
+        when (action) {
+            PedalAction.NEXT_PRESET -> stepPreset(+1)
+            PedalAction.PREV_PRESET -> stepPreset(-1)
+            PedalAction.RECORD -> toggleRecording()
+            PedalAction.GATE -> toggleGate(!gateEnabled)
+            PedalAction.TUNER -> Unit // handled by the screen (AppRoot)
+            else -> {
+                val index = action.ordinal - PedalAction.BLOCK_1.ordinal
+                blocks.getOrNull(index)?.takeIf { !it.isEmpty }?.let { setEnabled(it, !it.enabled) }
+            }
+        }
+    }
+
+    fun stepPreset(delta: Int) {
+        if (presets.isEmpty()) return
+        val current = presets.indexOfFirst { it.id == currentPresetId }
+        val next = if (current < 0) (if (delta > 0) 0 else presets.lastIndex)
+        else ((current + delta) % presets.size + presets.size) % presets.size
+        loadPreset(presets[next])
+    }
+
     // ---- Tuner
 
     /** Starts tuning: output goes silent, and the reading updates ~20 times a second. */
@@ -456,15 +621,19 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
                 inputLevelDb = smooth(inputLevelDb, toDb(NativeAudio.takeInputPeak()))
                 outputLevelDb = smooth(outputLevelDb, toDb(NativeAudio.takeOutputPeak()))
                 cpuLoad = smoothLinear(cpuLoad, NativeAudio.takeCpuLoad())
+                recordingSeconds = NativeAudio.recordingSeconds().takeIf { it >= 0 }
                 if (!NativeAudio.isRunning()) {
-                    // Stopped by the system (e.g. device unplugged and couldn't restart).
+                    // Stopped by the system (device unplugged and couldn't restart), or from the notification.
                     running = false
                     status = NativeAudio.statusText()
-                    message = status
+                    if (status != "Stopped") message = status
+                    if (recordingSeconds != null) stopRecording()
+                    AudioService.stop(getApplication())
                     resetMeters()
                     break
                 }
                 status = NativeAudio.statusText()
+                latencyMs = NativeAudio.roundTripLatencyMs()
                 delay(50)
             }
         }
@@ -477,8 +646,10 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
+        if (recordingSeconds != null) stopRecording()
         NativeAudio.setTunerActive(false)
         NativeAudio.stop()
+        AudioService.stop(getApplication())
         super.onCleared()
     }
 

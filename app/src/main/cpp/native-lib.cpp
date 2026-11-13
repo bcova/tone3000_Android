@@ -109,6 +109,51 @@ JNIEXPORT void JNICALL JNI_FN(setEq)(JNIEnv*, jobject, jboolean enabled, jfloat 
   engine().core().setEq(enabled == JNI_TRUE, bass, middle, treble);
 }
 
+JNIEXPORT void JNICALL JNI_FN(setDevices)(JNIEnv*, jobject, jint inputId, jint outputId)
+{
+  engine().setDevices(inputId, outputId);
+}
+
+JNIEXPORT void JNICALL JNI_FN(setBufferBursts)(JNIEnv*, jobject, jint bursts)
+{
+  engine().setBufferBursts(bursts);
+}
+
+JNIEXPORT jint JNICALL JNI_FN(roundTripLatencyMs)(JNIEnv*, jobject)
+{
+  return engine().roundTripLatencyMs();
+}
+
+JNIEXPORT void JNICALL JNI_FN(setBlockLevelDb)(JNIEnv*, jobject, jlong id, jfloat db)
+{
+  engine().core().setBlockLevelDb(id, db);
+}
+
+JNIEXPORT void JNICALL JNI_FN(setEqBeforeCab)(JNIEnv*, jobject, jboolean before)
+{
+  engine().core().setEqBeforeCab(before == JNI_TRUE);
+}
+
+JNIEXPORT void JNICALL JNI_FN(setInputCalibration)(JNIEnv*, jobject, jboolean enabled, jfloat interfaceDbu)
+{
+  engine().core().setInputCalibration(enabled == JNI_TRUE, interfaceDbu);
+}
+
+JNIEXPORT jstring JNICALL JNI_FN(startRecording)(JNIEnv* env, jobject, jstring path)
+{
+  return errorOrNull(env, engine().core().recorder().start(toStdString(env, path)));
+}
+
+JNIEXPORT jdouble JNICALL JNI_FN(stopRecording)(JNIEnv*, jobject)
+{
+  return engine().core().recorder().stop();
+}
+
+JNIEXPORT jdouble JNICALL JNI_FN(recordingSeconds)(JNIEnv*, jobject)
+{
+  return engine().core().recorder().recording() ? engine().core().recorder().seconds() : -1.0;
+}
+
 JNIEXPORT void JNICALL JNI_FN(setTunerActive)(JNIEnv*, jobject, jboolean active)
 {
   engine().core().setTunerActive(active == JNI_TRUE);

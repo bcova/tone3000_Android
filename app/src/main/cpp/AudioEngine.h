@@ -29,6 +29,14 @@ public:
   void stop();
   bool isRunning() const;
 
+  // Which devices to use (Android AudioDeviceInfo ids; 0 = system default).
+  // Restarts the audio if it's running.
+  void setDevices(int inputId, int outputId);
+  // Output buffer size in bursts: 1 = lowest latency (may crackle), 2 = default, 4 = safest.
+  void setBufferBursts(int bursts);
+  // Estimated time from guitar in to headphones out, in ms (-1 if unknown).
+  int roundTripLatencyMs() const;
+
   // Human-readable stream info for the UI, e.g. "48000 Hz · 96-frame bursts · exclusive".
   std::string statusText() const;
 
@@ -51,6 +59,11 @@ private:
   std::shared_ptr<oboe::AudioStream> mInput;
   std::shared_ptr<oboe::AudioStream> mOutput;
   std::vector<float> mMono; // audio-thread scratch
+  std::vector<float> mLeft, mRight; // audio-thread scratch
+  int mInputDeviceId = 0;
+  int mOutputDeviceId = 0;
+  int mBufferBursts = 2;
+  void restartLocked();
   int mOutChannels = 2; // set before streams start; read by the audio thread
   mutable std::mutex mLock;
   bool mWantRunning = false;
