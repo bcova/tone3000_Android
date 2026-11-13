@@ -22,7 +22,7 @@ import kotlin.math.max
 
 /** A tone loaded from TONE3000, shown on its signal-chain block (TONE3000 design rule 5). */
 data class LoadedTone(
-    val toneId: Long,
+    val toneId: String,
     val title: String,
     val imageUrl: String?,
     val gearLabel: String,

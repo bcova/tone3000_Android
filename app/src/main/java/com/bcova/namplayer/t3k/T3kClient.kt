@@ -4,12 +4,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import android.util.Log
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+
+/** JSON settings for TONE3000 responses: tolerant of extra fields and nulls. */
+val T3kJson = Json { ignoreUnknownKeys = true; coerceInputValues = true; explicitNulls = false }
 
 /** A problem talking to TONE3000, with a message that's safe to show the user. */
 class T3kException(message: String, val status: Int = 0) : IOException(message)
@@ -26,7 +31,7 @@ class SignedOutException : IOException("Please sign in to TONE3000 again.")
  */
 class T3kClient(private val tokens: TokenStore) {
 
-    private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
+    private val json = T3kJson
     private val refreshLock = Mutex()
 
     // ---- Auth
@@ -57,7 +62,7 @@ class T3kClient(private val tokens: TokenStore) {
     suspend fun trending(): List<Tone> = get<DataList<Tone>>("/api/v1/tones/trending").data
     suspend fun latest(): List<Tone> = get<DataList<Tone>>("/api/v1/tones/latest").data
 
-    suspend fun tone(id: Long): Tone = get("/api/v1/tones/$id")
+    suspend fun tone(id: String): Tone = get("/api/v1/tones/$id")
 
     /**
      * All playable models of a tone. TONE3000 hides newer "A2" models unless asked, and
@@ -96,10 +101,18 @@ class T3kClient(private val tokens: TokenStore) {
                 conn = open(T3kConfig.BASE_URL + path, authorized = true)
             }
             checkStatus(conn)
-            json.decodeFromString<T>(conn.inputStream.bufferedReader().use { it.readText() })
+            decode<T>(conn.inputStream.bufferedReader().use { it.readText() })
         } finally {
             conn.disconnect()
         }
+    }
+
+    /** Parses a response; turns format surprises into a readable message (details go to Logcat). */
+    private inline fun <reified T> decode(body: String): T = try {
+        json.decodeFromString<T>(body)
+    } catch (e: SerializationException) {
+        Log.e("T3kClient", "Unexpected TONE3000 response", e)
+        throw T3kException("TONE3000 sent data this app didn't understand. Please update the app or try again later.")
     }
 
     private suspend inline fun <reified T> postForm(path: String, form: Map<String, String>): T =
@@ -118,7 +131,7 @@ class T3kClient(private val tokens: TokenStore) {
                 }
                 conn.outputStream.use { it.write(body.toByteArray()) }
                 checkStatus(conn)
-                json.decodeFromString<T>(conn.inputStream.bufferedReader().use { it.readText() })
+                decode<T>(conn.inputStream.bufferedReader().use { it.readText() })
             } finally {
                 conn.disconnect()
             }

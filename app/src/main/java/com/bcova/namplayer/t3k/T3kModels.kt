@@ -1,10 +1,33 @@
 package com.bcova.namplayer.t3k
 
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.jsonPrimitive
 
 // Data shapes from the TONE3000 API v1 (https://www.tone3000.com/api#types).
 // Only the fields the app uses are listed; unknown fields are ignored.
+
+/**
+ * IDs as text. The docs say some IDs are numbers, but the live API sends some as text
+ * (e.g. user IDs are UUIDs like "c5b78330-…"). Accepting both keeps the app working either way.
+ */
+object FlexibleIdSerializer : KSerializer<String> {
+    override val descriptor = PrimitiveSerialDescriptor("FlexibleId", PrimitiveKind.STRING)
+
+    override fun deserialize(decoder: Decoder): String =
+        if (decoder is JsonDecoder) decoder.decodeJsonElement().jsonPrimitive.content
+        else decoder.decodeString()
+
+    override fun serialize(encoder: Encoder, value: String) = encoder.encodeString(value)
+}
+
+typealias T3kId = @Serializable(with = FlexibleIdSerializer::class) String
 
 @Serializable
 data class Session(
@@ -15,7 +38,7 @@ data class Session(
 
 @Serializable
 data class T3kUser(
-    val id: Long,
+    val id: T3kId,
     val username: String,
     @SerialName("display_name") val displayName: String? = null,
     @SerialName("avatar_url") val avatarUrl: String? = null,
@@ -28,7 +51,7 @@ data class T3kUser(
 
 @Serializable
 data class Tone(
-    val id: Long,
+    val id: T3kId,
     val title: String,
     val description: String? = null,
     val user: T3kUser,
@@ -79,11 +102,11 @@ data class Tone(
 
 @Serializable
 data class ToneModel(
-    val id: Long,
+    val id: T3kId,
     val name: String,
     @SerialName("model_url") val modelUrl: String,
     val size: String? = null,
-    @SerialName("tone_id") val toneId: Long,
+    @SerialName("tone_id") val toneId: T3kId,
     @SerialName("architecture_version") val architecture: String? = null,
 ) {
     val sizeLabel: String

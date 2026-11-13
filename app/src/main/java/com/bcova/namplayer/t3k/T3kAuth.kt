@@ -133,7 +133,7 @@ fun buildAuthorizeUrl(pending: PendingAuth): Uri {
 data class AuthCallback(
     val code: String?,
     val state: String?,
-    val toneId: Long?,
+    val toneId: String?,
     val canceled: Boolean,
     val error: String?,
 ) {
@@ -144,7 +144,7 @@ data class AuthCallback(
         fun parse(uri: Uri) = AuthCallback(
             code = uri.getQueryParameter("code"),
             state = uri.getQueryParameter("state"),
-            toneId = uri.getQueryParameter("tone_id")?.toLongOrNull(),
+            toneId = uri.getQueryParameter("tone_id")?.takeIf { it.isNotBlank() },
             canceled = uri.getQueryParameter("canceled") == "true",
             error = uri.getQueryParameter("error"),
         )

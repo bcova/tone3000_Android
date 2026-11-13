@@ -31,7 +31,7 @@ sealed interface Screen {
     data object Player : Screen
     data class Partnership(val target: TargetSlot) : Screen
     data class Library(val target: TargetSlot) : Screen
-    data class ToneDetail(val toneId: Long, val target: TargetSlot) : Screen
+    data class ToneDetail(val toneId: String, val target: TargetSlot) : Screen
 }
 
 enum class LibraryTab(val label: String) {
@@ -235,7 +235,7 @@ class T3kViewModel(app: Application) : AndroidViewModel(app) {
         openDetail(tone.id, tone)
     }
 
-    private fun openDetail(toneId: Long, known: Tone? = null) {
+    private fun openDetail(toneId: String, known: Tone? = null) {
         val state = ToneDetailState().apply { tone = known }
         detail = state
         viewModelScope.launch {
