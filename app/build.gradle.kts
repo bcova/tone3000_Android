@@ -21,6 +21,9 @@ android {
         // Set in gradle.properties as t3kClientId. NEVER put the secret key (t3k_cs_…) here.
         val t3kClientId = (project.findProperty("t3kClientId") as String?).orEmpty()
         buildConfigField("String", "T3K_CLIENT_ID", "\"$t3kClientId\"")
+        // In-app full catalog search: see gradle.properties before sharing the app.
+        val fullSearch = (project.findProperty("t3kFullCatalogSearch") as String?).toBoolean()
+        buildConfigField("boolean", "T3K_FULL_CATALOG_SEARCH", fullSearch.toString())
 
         ndk {
             // arm64 = real phones; x86_64 = the Android Studio emulator.

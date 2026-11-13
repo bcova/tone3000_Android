@@ -19,6 +19,13 @@ object T3kConfig {
     const val BASE_URL = "https://www.tone3000.com"
     const val REDIRECT_URI = "com.bcova.namplayer://callback"
     val CLIENT_ID: String = BuildConfig.T3K_CLIENT_ID
+
+    /**
+     * In-app full catalog search uses TONE3000 endpoints reserved for approved/commercial apps.
+     * OK for personal development and testing; turn OFF (gradle.properties) before sharing the
+     * app unless TONE3000 has approved it in writing.
+     */
+    val FULL_CATALOG_SEARCH: Boolean = BuildConfig.T3K_FULL_CATALOG_SEARCH
 }
 
 /** Why a sign-in was started, so we know what to do when the user comes back. */

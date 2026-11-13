@@ -64,6 +64,30 @@ class T3kClient(private val tokens: TokenStore) {
 
     suspend fun tone(id: String): Tone = get("/api/v1/tones/$id")
 
+    // ---- Full-catalog search (TONE3000 commercial tier; see SearchFilters.kt and README).
+    // Allowed for development/personal testing; needs TONE3000's written OK before sharing the app.
+
+    suspend fun search(filters: SearchFilters, page: Int): Paginated<Tone> {
+        requireFullSearch()
+        return get("/api/v1/tones/search?" + filters.toQuery(page))
+    }
+
+    suspend fun tags(query: String): List<NamedCount> {
+        requireFullSearch()
+        return get<Paginated<NamedCount>>("/api/v1/tags?page_size=25&query=${enc(query)}").data
+    }
+
+    suspend fun makes(query: String): List<NamedCount> {
+        requireFullSearch()
+        return get<Paginated<NamedCount>>("/api/v1/makes?page_size=25&query=${enc(query)}").data
+    }
+
+    private fun requireFullSearch() {
+        if (!T3kConfig.FULL_CATALOG_SEARCH) throw T3kException("Full catalog search is turned off in this build.")
+    }
+
+    private fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
+
     /**
      * All playable models of a tone. TONE3000 hides newer "A2" models unless asked, and
      * this app supports them (they're also lighter on the CPU), so fetch both and merge.

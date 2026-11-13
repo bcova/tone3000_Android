@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -12,6 +13,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.bcova.namplayer.t3k.AuthCallback
 import com.bcova.namplayer.t3k.AuthPurpose
+import com.bcova.namplayer.t3k.NamedCount
+import com.bcova.namplayer.t3k.SearchFilters
 import com.bcova.namplayer.t3k.PendingAuth
 import com.bcova.namplayer.t3k.Pkce
 import com.bcova.namplayer.t3k.SignedOutException
@@ -23,6 +26,7 @@ import com.bcova.namplayer.t3k.Tone
 import com.bcova.namplayer.t3k.ToneModel
 import com.bcova.namplayer.t3k.buildAuthorizeUrl
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -32,7 +36,11 @@ sealed interface Screen {
     data class Partnership(val target: TargetSlot) : Screen
     data class Library(val target: TargetSlot) : Screen
     data class ToneDetail(val toneId: String, val target: TargetSlot) : Screen
+    data class Search(val target: TargetSlot) : Screen
 }
+
+/** Which list the tag/make picker is showing. */
+enum class SuggestionKind { TAGS, MAKES }
 
 enum class LibraryTab(val label: String) {
     FAVORITES("Favorites"),
@@ -222,6 +230,8 @@ class T3kViewModel(app: Application) : AndroidViewModel(app) {
                 tones.addAll(newTones.filter { new -> tones.none { it.id == new.id } })
             } catch (e: SignedOutException) {
                 handleSignedOut(e)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e // switched tabs: not an error
             } catch (e: Exception) {
                 listError = e.message ?: "Couldn't load tones."
             } finally {
@@ -292,11 +302,109 @@ class T3kViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---- Full-catalog search (only when T3kConfig.FULL_CATALOG_SEARCH is on)
+
+    var filters by mutableStateOf(SearchFilters())
+        private set
+    val results = mutableStateListOf<Tone>()
+    var resultsTotal by mutableIntStateOf(0)
+        private set
+    var searchLoading by mutableStateOf(false)
+        private set
+    var searchError by mutableStateOf<String?>(null)
+        private set
+    private var searchPage = 1
+    private var searchTotalPages = 1
+    private var searchJob: Job? = null
+
+    val canSearchMore: Boolean get() = searchPage < searchTotalPages && !searchLoading
+
+    fun openSearch(target: TargetSlot) {
+        push(Screen.Search(target))
+        val wanted = if (target == TargetSlot.CAB) Tone.FORMAT_IR else Tone.FORMAT_NAM
+        // Start with the right format for the block being filled; keep earlier searches otherwise.
+        if (results.isEmpty() || filters.format != wanted) updateFilters(filters.copy(format = wanted))
+    }
+
+    /** Typing: wait until the user pauses, to stay well under the 100 requests/minute limit. */
+    fun setQuery(query: String) = updateFilters(filters.copy(query = query), debounceMs = 450)
+
+    fun updateFilters(newFilters: SearchFilters, debounceMs: Long = 0) {
+        filters = newFilters
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
+            if (debounceMs > 0) delay(debounceMs)
+            searchPage = 1
+            searchTotalPages = 1
+            results.clear()
+            fetchSearchPage()
+        }
+    }
+
+    fun clearFilters() = updateFilters(SearchFilters(query = filters.query, sort = filters.sort, format = filters.format))
+
+    fun searchMore() {
+        if (!canSearchMore) return
+        searchPage++
+        searchJob = viewModelScope.launch { fetchSearchPage() }
+    }
+
+    fun retrySearch() = updateFilters(filters)
+
+    private suspend fun fetchSearchPage() {
+        searchLoading = true
+        searchError = null
+        try {
+            val page = client.search(filters, searchPage)
+            searchTotalPages = page.totalPages
+            resultsTotal = page.total
+            results.addAll(page.data.filter { new -> results.none { it.id == new.id } })
+        } catch (e: SignedOutException) {
+            handleSignedOut(e)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            searchError = e.message ?: "Search failed."
+        } finally {
+            searchLoading = false
+        }
+    }
+
+    // Tag / make picker suggestions
+    val suggestions = mutableStateListOf<NamedCount>()
+    var suggestionsLoading by mutableStateOf(false)
+        private set
+    private var suggestionJob: Job? = null
+
+    fun loadSuggestions(kind: SuggestionKind, query: String) {
+        suggestionJob?.cancel()
+        suggestionJob = viewModelScope.launch {
+            delay(300)
+            suggestionsLoading = true
+            try {
+                val list = if (kind == SuggestionKind.TAGS) client.tags(query) else client.makes(query)
+                suggestions.clear()
+                suggestions.addAll(list)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                suggestions.clear()
+            } finally {
+                suggestionsLoading = false
+            }
+        }
+    }
+
     private fun handleSignedOut(e: SignedOutException) {
         signedIn = false
         user = null
         message = e.message
-        val target = (screen as? Screen.Library)?.target ?: (screen as? Screen.ToneDetail)?.target ?: TargetSlot.AMP
+        val target = when (val s = screen) {
+            is Screen.Library -> s.target
+            is Screen.ToneDetail -> s.target
+            is Screen.Search -> s.target
+            else -> TargetSlot.AMP
+        }
         popToPlayer()
         push(Screen.Partnership(target))
     }

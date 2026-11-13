@@ -126,3 +126,11 @@ data class Paginated<T>(
 
 @Serializable
 data class DataList<T>(val data: List<T>)
+
+/** A tag or a make (brand/model) with how many public tones use it. */
+@Serializable
+data class NamedCount(
+    val id: T3kId,
+    val name: String,
+    @SerialName("tones_count") val tonesCount: Int = 0,
+)

@@ -32,6 +32,7 @@ fun AppRoot(amp: AmpViewModel = viewModel(), t3k: T3kViewModel = viewModel()) {
                 )
                 is Screen.Partnership -> PartnershipScreen(s.target, t3k)
                 is Screen.Library -> LibraryScreen(s.target, t3k)
+                is Screen.Search -> SearchScreen(s.target, t3k)
                 is Screen.ToneDetail -> ToneDetailScreen(t3k, onInstall = {
                     t3k.installSelected { file, tone, model ->
                         // The tone's format decides the slot: IRs go to the cabinet, NAM to the amp.

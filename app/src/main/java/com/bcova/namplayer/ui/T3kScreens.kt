@@ -26,6 +26,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -60,6 +61,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bcova.namplayer.t3k.AuthPurpose
+import com.bcova.namplayer.t3k.T3kConfig
 import com.bcova.namplayer.t3k.TargetSlot
 import com.bcova.namplayer.t3k.Tone
 
@@ -79,12 +81,14 @@ fun PartnershipScreen(target: TargetSlot, vm: T3kViewModel) {
         }
         Spacer(Modifier.weight(1f))
         Text("NAM Player", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-        Text("×", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(vertical = 8.dp))
+        Text("powered by", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 8.dp))
         T3kLogo(height = 40.dp)
         Spacer(Modifier.height(32.dp))
+        // Wording avoids implying an official partnership, which TONE3000's API terms
+        // say needs their written approval.
         Text(
-            "NAM Player has partnered with TONE3000 to give you access to a massive library of " +
-                "NAM captures and IRs of real analog gear, created by a global community of musicians.",
+            "Get access to TONE3000's massive library of NAM captures and IRs of real analog gear, " +
+                "created by a global community of musicians.",
             style = MaterialTheme.typography.bodyLarge,
             textAlign = TextAlign.Center,
         )
@@ -140,6 +144,9 @@ fun LibraryScreen(target: TargetSlot, vm: T3kViewModel) {
                     }
                 },
                 actions = {
+                    if (T3kConfig.FULL_CATALOG_SEARCH) {
+                        IconButton(onClick = { vm.openSearch(target) }) { Icon(Icons.Default.Search, contentDescription = "Search TONE3000") }
+                    }
                     // Show who is signed in.
                     vm.user?.let { user ->
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 12.dp)) {
@@ -162,6 +169,24 @@ fun LibraryScreen(target: TargetSlot, vm: T3kViewModel) {
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
+            if (T3kConfig.FULL_CATALOG_SEARCH) {
+                // Looks like a search box; opens the full search screen.
+                Surface(
+                    onClick = { vm.openSearch(target) },
+                    shape = MaterialTheme.shapes.extraLarge,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                    Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.width(10.dp))
+                        Text("Search all tones, tags, gear…", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                        PoweredByT3k()
+                    }
+                }
+            } else {
+                Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), Alignment.CenterEnd) { PoweredByT3k() }
+            }
             ScrollableTabRow(selectedTabIndex = vm.tab.ordinal, edgePadding = 8.dp) {
                 LibraryTab.entries.forEach { t ->
                     Tab(selected = vm.tab == t, onClick = { vm.selectTab(t) }, text = { Text(t.label) })
@@ -282,6 +307,7 @@ fun ToneDetailScreen(vm: T3kViewModel, onInstall: () -> Unit) {
                         Chip(tone.formatLabel, MaterialTheme.colorScheme.secondary.copy(alpha = 0.35f))
                     }
                     CreatorRow(tone.user, avatarSize = 24.dp)
+                    PoweredByT3k()
                     tone.description?.takeIf { it.isNotBlank() }?.let { Description(it) }
 
                     Text("MODEL", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

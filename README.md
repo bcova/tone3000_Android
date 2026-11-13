@@ -54,6 +54,10 @@ If you skip this, the build stops with a message telling you to run that command
 3. On the tone's page, choose a model (e.g. Clean / Crunch / Lead) and tap **Load**.
    The app downloads it and loads it into the right block automatically (NAM → amp, IR → cabinet).
 
+**Search the whole catalog:** in Your Tones, tap the search box. Type words (e.g. "plexi") and narrow
+results with filters: sort, format (NAM/IR), gear type, model size, tags, makes (brands and models),
+A2 only, calibrated, and verified creators. See the important note below before sharing the app.
+
 **From your phone:** tap **Load from phone** on a block and pick a file:
 
 - **Amp model:** a `.nam` file.
@@ -117,7 +121,20 @@ clean, measure speed, and swap models while audio is running.
 
 Ideas next: remember the last tone between launches, noise gate, choose input/output device, tuner.
 
+### ⚠️ Full catalog search: personal use only (for now)
+
+In-app search uses TONE3000 endpoints (`/tones/search`, `/tags`, `/makes`) that their
+[API terms](https://www.tone3000.com/api/terms) reserve for approved (commercial) apps. The terms also say
+*"Evaluating and developing against the API is free for everyone"*, so it's fine on your own phone.
+
+**Before sharing the app with anyone**, either:
+- get written permission from TONE3000 (support@tone3000.com), or
+- set `t3kFullCatalogSearch=false` in `gradle.properties` and rebuild. Search disappears, and the app
+  uses only free-tier features. Browsing the full catalog still works through TONE3000's own page.
+
 ### TONE3000 integration notes
+
+- Tones are **Powered by [TONE3000](https://www.tone3000.com)**. The API terms require that label and this link.
 
 - This is a **free, non-commercial** app, so it uses TONE3000's **free tier**: no paid features or upsells.
   The free tier may only use the OAuth prompt flows (`select_tone`, `load_tone`) and the
