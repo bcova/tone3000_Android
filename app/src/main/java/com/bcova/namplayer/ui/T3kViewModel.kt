@@ -20,7 +20,7 @@ import com.bcova.namplayer.t3k.Pkce
 import com.bcova.namplayer.t3k.SignedOutException
 import com.bcova.namplayer.t3k.T3kClient
 import com.bcova.namplayer.t3k.T3kUser
-import com.bcova.namplayer.t3k.TargetSlot
+import com.bcova.namplayer.t3k.BlockTarget
 import com.bcova.namplayer.t3k.TokenStore
 import com.bcova.namplayer.t3k.Tone
 import com.bcova.namplayer.t3k.ToneModel
@@ -33,10 +33,10 @@ import java.io.File
 /** Screens of the app. The player is always at the bottom of the stack. */
 sealed interface Screen {
     data object Player : Screen
-    data class Partnership(val target: TargetSlot) : Screen
-    data class Library(val target: TargetSlot) : Screen
-    data class ToneDetail(val toneId: String, val target: TargetSlot) : Screen
-    data class Search(val target: TargetSlot) : Screen
+    data class Partnership(val target: BlockTarget) : Screen
+    data class Library(val target: BlockTarget) : Screen
+    data class ToneDetail(val toneId: String, val target: BlockTarget) : Screen
+    data class Search(val target: BlockTarget) : Screen
 }
 
 /** Which list the tag/make picker is showing. */
@@ -122,7 +122,7 @@ class T3kViewModel(app: Application) : AndroidViewModel(app) {
         private set
 
     /** Entry point from a signal-chain block: "add or change the tone in this slot". */
-    fun openBrowser(target: TargetSlot) {
+    fun openBrowser(target: BlockTarget) {
         if (signedIn) {
             push(Screen.Library(target))
             refreshList()
@@ -133,7 +133,7 @@ class T3kViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Opens TONE3000 in a browser tab. SELECT_TONE also signs the user in if needed. */
-    fun launchTone3000(context: Context, purpose: AuthPurpose, target: TargetSlot) {
+    fun launchTone3000(context: Context, purpose: AuthPurpose, target: BlockTarget) {
         val pending = PendingAuth(Pkce.newVerifier(), Pkce.newState(), purpose, target)
         tokenStore.savePending(pending)
         CustomTabsIntent.Builder().setShowTitle(true).build()
@@ -240,7 +240,7 @@ class T3kViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun openTone(tone: Tone, target: TargetSlot) {
+    fun openTone(tone: Tone, target: BlockTarget) {
         push(Screen.ToneDetail(tone.id, target))
         openDetail(tone.id, tone)
     }
@@ -279,10 +279,11 @@ class T3kViewModel(app: Application) : AndroidViewModel(app) {
      * Downloads the chosen model and loads it into the engine via [install].
      * [install] returns null on success or an error message.
      */
-    fun installSelected(install: suspend (file: File, tone: Tone, model: ToneModel) -> String?) {
+    fun installSelected(install: suspend (file: File, tone: Tone, model: ToneModel, target: BlockTarget) -> String?) {
         val state = detail
         val tone = state.tone ?: return
         val model = state.selectedModel ?: return
+        val target = (screen as? Screen.ToneDetail)?.target ?: return
         viewModelScope.launch {
             state.installing = true
             state.error = null
@@ -290,7 +291,7 @@ class T3kViewModel(app: Application) : AndroidViewModel(app) {
                 val ext = if (tone.format == Tone.FORMAT_IR) "wav" else "nam"
                 val file = File(getApplication<Application>().cacheDir, "t3k/${model.id}.$ext")
                 if (!file.exists()) client.download(model, file)
-                val error = install(file, tone, model)
+                val error = install(file, tone, model, target)
                 if (error == null) popToPlayer() else state.error = error
             } catch (e: SignedOutException) {
                 handleSignedOut(e)
@@ -319,11 +320,15 @@ class T3kViewModel(app: Application) : AndroidViewModel(app) {
 
     val canSearchMore: Boolean get() = searchPage < searchTotalPages && !searchLoading
 
-    fun openSearch(target: TargetSlot) {
+    private var searchKind: com.bcova.namplayer.t3k.BlockKind? = null
+
+    fun openSearch(target: BlockTarget) {
         push(Screen.Search(target))
-        val wanted = if (target == TargetSlot.CAB) Tone.FORMAT_IR else Tone.FORMAT_NAM
-        // Start with the right format for the block being filled; keep earlier searches otherwise.
-        if (results.isEmpty() || filters.format != wanted) updateFilters(filters.copy(format = wanted))
+        // Start with filters that fit the block being filled; keep the last search for the same kind.
+        if (results.isEmpty() || searchKind != target.kind) {
+            searchKind = target.kind
+            updateFilters(SearchFilters(query = filters.query, format = target.kind.format, gears = target.kind.gears))
+        }
     }
 
     /** Typing: wait until the user pauses, to stay well under the 100 requests/minute limit. */
@@ -403,7 +408,7 @@ class T3kViewModel(app: Application) : AndroidViewModel(app) {
             is Screen.Library -> s.target
             is Screen.ToneDetail -> s.target
             is Screen.Search -> s.target
-            else -> TargetSlot.AMP
+            else -> BlockTarget(-1L, com.bcova.namplayer.t3k.BlockKind.ANY)
         }
         popToPlayer()
         push(Screen.Partnership(target))

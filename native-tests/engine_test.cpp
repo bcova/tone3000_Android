@@ -121,62 +121,101 @@ int main()
   std::printf("2) Rejects bad files\n");
   {
     EngineCore core(kRate);
-    CHECK(!core.loadModel((tmp / "missing.nam").string()).empty(), "missing .nam reports an error");
-    CHECK(!core.loadModel((tmp / "x.wav").string()).empty(), "wrong extension for model reports an error");
-    CHECK(!core.loadIr((models / "lstm.nam").string()).empty(), "wrong extension for IR reports an error");
+    CHECK(!core.loadBlock(1, (tmp / "missing.nam").string()).empty(), "missing .nam reports an error");
+    CHECK(!core.loadBlock(1, (tmp / "x.txt").string()).empty(), "unsupported extension reports an error");
     std::ofstream(tmp / "garbage.nam") << "not json";
-    CHECK(!core.loadModel((tmp / "garbage.nam").string()).empty(), "corrupt .nam reports an error");
-    CHECK(!core.hasModel(), "no model loaded after failures");
+    CHECK(!core.loadBlock(1, (tmp / "garbage.nam").string()).empty(), "corrupt .nam reports an error");
+    CHECK(core.blockCount() == 0, "no blocks after failures");
   }
 
   std::printf("3) Each example model, 128-frame blocks\n");
   for (const char* name : {"lstm.nam", "wavenet.nam", "wavenet_a1_standard.nam", "A2.nam"})
   {
     EngineCore core(kRate);
-    const std::string err = core.loadModel((models / name).string());
+    const std::string err = core.loadBlock(1, (models / name).string());
     CHECK(err.empty(), (std::string("load ") + name + ": " + err).c_str());
     if (!err.empty())
       continue;
     auto s = runSignal(core, input, 128);
-    std::printf("   %-26s peak %.3f  speed %.1fx real time\n", name, s.peak, s.realtimeFactor);
+    std::printf("   %-26s peak %.3f  speed %.1fx real time  cpu %.0f%%\n", name, s.peak, s.realtimeFactor,
+                core.takeCpuLoad() * 100);
     CHECK(s.allFinite, "output finite");
     CHECK(s.peak > 1e-4f, "model produces sound");
   }
 
-  std::printf("4) Model + cabinet IR, odd block size\n");
+  writeTestIr(tmp / "cab.wav", 2048, 44100); // different rate: exercises resampling
+
+  std::printf("4) Pedal -> amp -> cab chain, odd block size\n");
   {
-    writeTestIr(tmp / "cab.wav", 2048, 44100); // different rate: exercises resampling
     EngineCore core(kRate);
-    CHECK(core.loadModel((models / "wavenet_a1_standard.nam").string()).empty(), "load model");
-    const std::string err = core.loadIr((tmp / "cab.wav").string());
+    CHECK(core.loadBlock(10, (models / "lstm.nam").string()).empty(), "load pedal");
+    CHECK(core.loadBlock(20, (models / "A2.nam").string()).empty(), "load amp");
+    const std::string err = core.loadBlock(30, (tmp / "cab.wav").string());
     CHECK(err.empty(), ("load IR: " + err).c_str());
+    CHECK(core.blockCount() == 3, "three blocks");
     auto s = runSignal(core, input, 333); // not a power of two, on purpose
-    std::printf("   model+IR                   peak %.3f  speed %.1fx real time\n", s.peak, s.realtimeFactor);
+    std::printf("   pedal+amp+cab              peak %.3f  speed %.1fx real time\n", s.peak, s.realtimeFactor);
     CHECK(s.allFinite, "output finite");
     CHECK(s.peak > 1e-4f, "chain produces sound");
 
-    // Oversized callback gets split into chunks.
-    std::vector<float> big(EngineCore::kMaxBlock * 3 + 17, 0.1f), out(big.size());
+    std::vector<float> big(EngineCore::kMaxFrames * 3 + 17, 0.1f), out(big.size());
     core.process(big.data(), out.data(), static_cast<int>(big.size()));
     bool finite = true;
     for (float v : out)
       finite = finite && std::isfinite(v);
-    CHECK(finite, "oversized block handled");
+    CHECK(finite, "oversized callback handled");
+    CHECK(core.takeCpuLoad() > 0.0f, "CPU meter reports load");
+    CHECK(core.takeCpuLoad() == 0.0f, "CPU meter resets after reading");
   }
 
-  std::printf("5) Gain controls and bypass\n");
+  std::printf("5) Order matters, remove, replace, limits\n");
+  {
+    // Two different chains of the same blocks should sound different (nonlinear models).
+    auto render = [&](const std::vector<int64_t>& order) {
+      EngineCore core(kRate);
+      core.loadBlock(1, (models / "lstm.nam").string());
+      core.loadBlock(2, (models / "wavenet.nam").string());
+      core.setNormalize(false);
+      core.setOrder(order);
+      std::vector<float> out(input.size());
+      for (size_t pos = 0; pos + 256 <= input.size(); pos += 256)
+        core.process(input.data() + pos, out.data() + pos, 256);
+      return out;
+    };
+    auto a = render({1, 2});
+    auto b = render({2, 1});
+    double diff = 0;
+    for (size_t i = 0; i < a.size(); ++i)
+      diff += std::fabs(a[i] - b[i]);
+    CHECK(diff > 1.0, "reordering blocks changes the sound");
+
+    EngineCore core(kRate);
+    CHECK(core.loadBlock(1, (models / "lstm.nam").string()).empty(), "load");
+    CHECK(core.loadBlock(1, (models / "wavenet.nam").string()).empty(), "replace same id");
+    CHECK(core.blockCount() == 1, "replacing keeps one block");
+    core.setBlockEnabled(1, false);
+    runSignal(core, input, 256);
+    auto s = runSignal(core, input, 256);
+    CHECK(std::fabs(s.peak - 0.48f) < 0.1f, "disabled block passes dry signal");
+    CHECK(core.loadBlock(1, (models / "lstm.nam").string()).empty(), "replace while disabled");
+    s = runSignal(core, input, 256);
+    CHECK(std::fabs(s.peak - 0.48f) < 0.1f, "replacement keeps the block disabled");
+    core.removeBlock(1);
+    CHECK(core.blockCount() == 0, "remove");
+    core.setOrder({5, 6, 7}); // unknown ids are ignored
+    for (int i = 0; i < EngineCore::kMaxBlocks; ++i)
+      CHECK(core.loadBlock(100 + i, (models / "lstm.nam").string()).empty(), "fill chain");
+    CHECK(!core.loadBlock(999, (models / "lstm.nam").string()).empty(), "chain limit enforced");
+    CHECK(core.loadBlock(100, (models / "wavenet.nam").string()).empty(), "replace allowed when full");
+  }
+
+  std::printf("6) Gain controls\n");
   {
     EngineCore core(kRate);
     core.setOutputGainDb(-6.0f);
     runSignal(core, input, 256); // let gain ramp settle
     auto s = runSignal(core, input, 256);
     CHECK(std::fabs(s.peak - 0.48f * 0.501f) < 0.05f, "-6 dB output gain halves the level");
-    CHECK(core.loadModel((models / "lstm.nam").string()).empty(), "load model");
-    core.setModelEnabled(false);
-    core.setOutputGainDb(0.0f);
-    runSignal(core, input, 256);
-    s = runSignal(core, input, 256);
-    CHECK(std::fabs(s.peak - 0.48f) < 0.1f, "bypassed model passes dry signal");
     core.takeInputPeak();
     std::vector<float> in(256, 0.25f), out(256);
     core.process(in.data(), out.data(), 256);
@@ -184,7 +223,7 @@ int main()
     CHECK(core.takeInputPeak() == 0.0f, "meter resets after reading");
   }
 
-  std::printf("6) Swap models while audio is running (thread safety)\n");
+  std::printf("7) Edit the chain while audio is running (thread safety)\n");
   {
     EngineCore core(kRate);
     std::atomic<bool> running{true};
@@ -204,18 +243,21 @@ int main()
       }
     });
     const char* names[] = {"lstm.nam", "wavenet.nam", "wavenet_a1_standard.nam"};
-    for (int i = 0; i < 9; ++i)
+    for (int i = 0; i < 12; ++i)
     {
-      CHECK(core.loadModel((models / names[i % 3]).string()).empty(), "swap load");
-      if (i % 3 == 2)
-        core.clearModel();
+      CHECK(core.loadBlock(i % 4, (models / names[i % 3]).string()).empty(), "load while running");
+      core.setOrder({3, 2, 1, 0});
+      core.setBlockEnabled(i % 4, i % 2 == 0);
+      if (i % 5 == 4)
+        core.removeBlock(i % 4);
     }
-    CHECK(core.loadIr((tmp / "cab.wav").string()).empty(), "IR load while running");
-    core.clearIr();
+    CHECK(core.loadBlock(9, (tmp / "cab.wav").string()).empty(), "IR load while running");
+    core.setOrder({9, 0, 1});
+    core.removeBlock(9);
     running = false;
     audio.join();
-    std::printf("   processed %ld blocks during 10 swaps\n", blocks.load());
-    CHECK(finite.load(), "output stayed finite during swaps");
+    std::printf("   processed %ld blocks during chain edits\n", blocks.load());
+    CHECK(finite.load(), "output stayed finite during edits");
   }
 
   fs::remove_all(tmp);

@@ -62,7 +62,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bcova.namplayer.t3k.AuthPurpose
 import com.bcova.namplayer.t3k.T3kConfig
-import com.bcova.namplayer.t3k.TargetSlot
+import com.bcova.namplayer.t3k.BlockKind
+import com.bcova.namplayer.t3k.BlockTarget
 import com.bcova.namplayer.t3k.Tone
 
 // ---------------------------------------------------------------------------------------------
@@ -70,7 +71,7 @@ import com.bcova.namplayer.t3k.Tone
 // ---------------------------------------------------------------------------------------------
 
 @Composable
-fun PartnershipScreen(target: TargetSlot, vm: T3kViewModel) {
+fun PartnershipScreen(target: BlockTarget, vm: T3kViewModel) {
     val context = LocalContext.current
     Column(
         Modifier.fillMaxSize().padding(24.dp),
@@ -114,7 +115,7 @@ fun PartnershipScreen(target: TargetSlot, vm: T3kViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LibraryScreen(target: TargetSlot, vm: T3kViewModel) {
+fun LibraryScreen(target: BlockTarget, vm: T3kViewModel) {
     val context = LocalContext.current
     val listState = rememberLazyListState()
     val nearEnd by remember {
@@ -137,7 +138,7 @@ fun LibraryScreen(target: TargetSlot, vm: T3kViewModel) {
                     Column {
                         T3kLogo(height = 18.dp)
                         Text(
-                            if (target == TargetSlot.AMP) "Your Tones · choosing an amp" else "Your Tones · choosing a cabinet",
+                            "Your Tones · ${choosingLabel(target.kind)}",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -278,8 +279,8 @@ fun ToneDetailScreen(vm: T3kViewModel, onInstall: () -> Unit) {
                             Spacer(Modifier.width(10.dp))
                             Text("Downloading…")
                         } else {
-                            val where = if (tone?.format == Tone.FORMAT_IR) "cabinet" else "amp"
-                            Text("Load into $where", fontWeight = FontWeight.Bold)
+                            val kind = (vm.screen as? Screen.ToneDetail)?.target?.kind
+                            Text("Load into ${kind?.label?.lowercase() ?: "chain"} block", fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -370,4 +371,13 @@ private fun Description(text: String) {
             )
         }
     }
+}
+
+/** "choosing a pedal", "choosing an amp", … */
+fun choosingLabel(kind: BlockKind): String = when (kind) {
+    BlockKind.AMP -> "choosing an amp"
+    BlockKind.OUTBOARD -> "choosing outboard gear"
+    BlockKind.ANY -> "choosing a tone"
+    BlockKind.CAB -> "choosing a cabinet"
+    else -> "choosing a ${kind.label.lowercase()}"
 }

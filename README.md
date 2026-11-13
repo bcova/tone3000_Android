@@ -7,8 +7,13 @@ A free Android app that plays **NAM (Neural Amp Modeler)** amp captures and **ca
 > TONE3000 sign-in + browsing with a vertical, phone-first interface.
 
 ```
-guitar ─► USB interface ─► input gain ─► NAM amp model (.nam) ─► cabinet IR (.wav) ─► output volume ─► headphones
+guitar ─► USB interface ─► input gain ─► block ─► block ─► … ─► output volume ─► headphones
+                                          (pedal)   (amp)   (cab, space, outboard…)
 ```
+
+The chain holds up to 8 blocks. Each block is a NAM capture (`.nam`) or an impulse response (`.wav`).
+Tap **Add block** to add a Pedal, Amp, Cab, Outboard, Space or Any block. Use a block's **⋮** menu
+to move it up or down, empty it, or remove it. Watch the **CPU** meter: near 100%, the audio crackles.
 
 ---
 

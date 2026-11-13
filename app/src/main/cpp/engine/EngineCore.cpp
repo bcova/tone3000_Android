@@ -54,25 +54,25 @@ private:
   uint64_t mSaved = 0;
 };
 
-void updatePeak(std::atomic<float>& peak, float value)
+void updateMax(std::atomic<float>& value, float candidate)
 {
-  if (value > peak.load(std::memory_order_relaxed))
-    peak.store(value, std::memory_order_relaxed);
+  if (candidate > value.load(std::memory_order_relaxed))
+    value.store(candidate, std::memory_order_relaxed);
 }
 
 } // namespace
 
 EngineCore::EngineCore(double sampleRate)
 : mSampleRate(sampleRate)
-, mScratch(kMaxBlock, 0.0f)
+, mChain(new Chain())
+, mScratch(kMaxFrames, 0.0f)
 {
 }
 
 EngineCore::~EngineCore()
 {
   // No audio thread may be running by now (the owner stops streams first).
-  delete mModel.exchange(nullptr);
-  delete mIr.exchange(nullptr);
+  delete mChain.exchange(nullptr);
 }
 
 void EngineCore::setInputGainDb(float db)
@@ -85,84 +85,132 @@ void EngineCore::setOutputGainDb(float db)
   mOutputGainTarget.store(dbToGain(db));
 }
 
-std::string EngineCore::loadModel(const std::string& path)
+std::string EngineCore::loadBlock(int64_t id, const std::string& path)
 {
-  return load(mModel, path, false);
-}
-
-std::string EngineCore::loadIr(const std::string& path)
-{
-  return load(mIr, path, true);
-}
-
-void EngineCore::clearModel()
-{
-  std::lock_guard<std::mutex> lock(mLoadMutex);
-  replace(mModel, nullptr);
-}
-
-void EngineCore::clearIr()
-{
-  std::lock_guard<std::mutex> lock(mLoadMutex);
-  replace(mIr, nullptr);
-}
-
-std::string EngineCore::load(std::atomic<Loaded*>& slot, const std::string& path, bool isIr)
-{
-  std::lock_guard<std::mutex> lock(mLoadMutex);
-
   const std::filesystem::path fsPath(path);
   std::string ext = fsPath.extension().string();
   std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  if (isIr && ext != ".wav")
-    return "Cabinet IRs must be .wav files.";
-  if (!isIr && ext != ".nam")
-    return "Amp models must be .nam files.";
+  if (ext != ".nam" && ext != ".wav")
+    return "Unsupported file: use a .nam capture or a .wav impulse response.";
 
-  auto next = std::make_unique<Loaded>();
+  {
+    std::lock_guard<std::mutex> lock(mEditMutex);
+    if (mBlocks.find(id) == mBlocks.end() && static_cast<int>(mBlocks.size()) >= kMaxBlocks)
+      return "The chain is full (" + std::to_string(kMaxBlocks) + " blocks).";
+  }
+
+  // Slow part, done without holding the lock.
+  auto block = std::make_shared<Block>();
   try
   {
-    next->dsp = nam::get_dsp(fsPath);
+    block->dsp = nam::get_dsp(fsPath);
   }
   catch (const std::exception& e)
   {
     return std::string("Could not load file: ") + e.what();
   }
-  if (!next->dsp)
+  if (!block->dsp)
     return "Could not load file.";
 
-  nam::DSP& dsp = *next->dsp;
+  nam::DSP& dsp = *block->dsp;
   if (dsp.NumInputChannels() != 1 || dsp.NumOutputChannels() < 1)
     return "Unsupported file: expected a mono-input model.";
 
   // Allocate and warm up now, so the audio thread never has to.
-  dsp.ResetAndPrewarm(mSampleRate, kMaxBlock);
+  dsp.ResetAndPrewarm(mSampleRate, kMaxFrames);
+  block->outBuffers.assign(dsp.NumOutputChannels(), std::vector<float>(kMaxFrames, 0.0f));
+  for (auto& b : block->outBuffers)
+    block->outPtrs.push_back(b.data());
+  if (ext == ".nam" && dsp.HasLoudness())
+    block->normalizeGain = static_cast<float>(std::pow(10.0, (kTargetLoudnessDb - dsp.GetLoudness()) / 20.0));
 
-  next->outBuffers.assign(dsp.NumOutputChannels(), std::vector<float>(kMaxBlock, 0.0f));
-  for (auto& b : next->outBuffers)
-    next->outPtrs.push_back(b.data());
-
-  if (!isIr && dsp.HasLoudness())
-    next->normalizeGain = static_cast<float>(std::pow(10.0, (kTargetLoudnessDb - dsp.GetLoudness()) / 20.0));
-
-  replace(slot, next.release());
+  std::lock_guard<std::mutex> lock(mEditMutex);
+  auto it = mBlocks.find(id);
+  if (it != mBlocks.end())
+  {
+    block->enabled.store(it->second->enabled.load()); // replacing keeps on/off state
+    mRetired.push_back(it->second);
+    it->second = block;
+  }
+  else
+  {
+    if (static_cast<int>(mBlocks.size()) >= kMaxBlocks) // filled up while we were loading
+      return "The chain is full (" + std::to_string(kMaxBlocks) + " blocks).";
+    mBlocks.emplace(id, block);
+    if (std::find(mOrder.begin(), mOrder.end(), id) == mOrder.end())
+      mOrder.push_back(id);
+  }
+  rebuildChainLocked();
   return "";
 }
 
-void EngineCore::replace(std::atomic<Loaded*>& slot, Loaded* next)
+void EngineCore::removeBlock(int64_t id)
 {
-  Loaded* old = slot.exchange(next);
-  if (old != nullptr)
+  std::lock_guard<std::mutex> lock(mEditMutex);
+  auto it = mBlocks.find(id);
+  if (it == mBlocks.end())
+    return;
+  mRetired.push_back(it->second);
+  mBlocks.erase(it);
+  rebuildChainLocked();
+}
+
+void EngineCore::setOrder(const std::vector<int64_t>& ids)
+{
+  std::lock_guard<std::mutex> lock(mEditMutex);
+  std::vector<int64_t> order;
+  for (int64_t id : ids)
+    if (std::find(order.begin(), order.end(), id) == order.end())
+      order.push_back(id);
+  // Keep any loaded blocks the caller didn't mention, after the listed ones.
+  for (int64_t id : mOrder)
+    if (std::find(order.begin(), order.end(), id) == order.end() && mBlocks.count(id))
+      order.push_back(id);
+  mOrder = std::move(order);
+  rebuildChainLocked();
+}
+
+void EngineCore::setBlockEnabled(int64_t id, bool enabled)
+{
+  std::lock_guard<std::mutex> lock(mEditMutex);
+  auto it = mBlocks.find(id);
+  if (it != mBlocks.end())
+    it->second->enabled.store(enabled);
+}
+
+bool EngineCore::hasBlock(int64_t id) const
+{
+  std::lock_guard<std::mutex> lock(mEditMutex);
+  return mBlocks.count(id) > 0;
+}
+
+int EngineCore::blockCount() const
+{
+  std::lock_guard<std::mutex> lock(mEditMutex);
+  return static_cast<int>(mBlocks.size());
+}
+
+void EngineCore::rebuildChainLocked()
+{
+  auto* next = new Chain();
+  next->blocks.reserve(mOrder.size());
+  for (int64_t id : mOrder)
   {
-    waitForAudioThread();
-    delete old;
+    auto it = mBlocks.find(id);
+    if (it != mBlocks.end())
+      next->blocks.push_back(it->second.get());
   }
+  Chain* old = mChain.exchange(next);
+  // The audio thread may still be walking the old chain (and retired blocks).
+  waitForAudioThread();
+  delete old;
+  mRetired.clear();
 }
 
 void EngineCore::waitForAudioThread()
 {
-  // If the audio thread is mid-callback it may still hold the old pointer.
-  // Wait until that callback finishes; any later callback sees the new one.
+  // If the audio thread is mid-callback it may still hold the old pointers.
+  // Wait until that callback finishes; any later callback sees the new chain.
   const uint64_t seq = mProcessSeq.load();
   if ((seq & 1u) == 0)
     return;
@@ -170,35 +218,35 @@ void EngineCore::waitForAudioThread()
     std::this_thread::sleep_for(std::chrono::microseconds(200));
 }
 
-void EngineCore::runDsp(Loaded& loaded, float* buffer, int numFrames)
+void EngineCore::runBlock(Block& block, float* buffer, int numFrames, bool normalize)
 {
   float* inPtr = buffer;
-  loaded.dsp->process(&inPtr, loaded.outPtrs.data(), numFrames);
+  block.dsp->process(&inPtr, block.outPtrs.data(), numFrames);
   // Use the first output channel (stereo IRs: left).
-  std::copy_n(loaded.outPtrs[0], numFrames, buffer);
+  const float* out = block.outPtrs[0];
+  const float gain = normalize ? block.normalizeGain : 1.0f;
+  for (int i = 0; i < numFrames; ++i)
+    buffer[i] = out[i] * gain;
 }
 
 void EngineCore::process(const float* in, float* out, int numFrames)
 {
   mProcessSeq.fetch_add(1); // now odd: "audio thread busy"
+  const auto start = std::chrono::steady_clock::now();
   ScopedFlushDenormals noDenormals;
 
-  Loaded* model = mModel.load();
-  Loaded* ir = mIr.load();
-  const bool useModel = model != nullptr && mModelEnabled.load(std::memory_order_relaxed);
-  const bool useIr = ir != nullptr && mIrEnabled.load(std::memory_order_relaxed);
-  const float normGain = (useModel && mNormalize.load(std::memory_order_relaxed)) ? model->normalizeGain : 1.0f;
-
+  const Chain* chain = mChain.load();
+  const bool normalize = mNormalize.load(std::memory_order_relaxed);
   const float inTarget = mInputGainTarget.load(std::memory_order_relaxed);
-  const float outTarget = mOutputGainTarget.load(std::memory_order_relaxed) * normGain;
+  const float outTarget = mOutputGainTarget.load(std::memory_order_relaxed);
 
   float inPeak = 0.0f;
   float outPeak = 0.0f;
   float* buf = mScratch.data();
 
-  for (int offset = 0; offset < numFrames; offset += kMaxBlock)
+  for (int offset = 0; offset < numFrames; offset += kMaxFrames)
   {
-    const int n = std::min(kMaxBlock, numFrames - offset);
+    const int n = std::min(kMaxFrames, numFrames - offset);
 
     // Ramp gains across the chunk so slider moves don't "zipper".
     const float inStep = (inTarget - mInputGain) / static_cast<float>(n);
@@ -211,10 +259,9 @@ void EngineCore::process(const float* in, float* out, int numFrames)
     }
     mInputGain = inTarget;
 
-    if (useModel)
-      runDsp(*model, buf, n);
-    if (useIr)
-      runDsp(*ir, buf, n);
+    for (Block* block : chain->blocks)
+      if (block->enabled.load(std::memory_order_relaxed))
+        runBlock(*block, buf, n, normalize);
 
     const float outStep = (outTarget - mOutputGain) / static_cast<float>(n);
     for (int i = 0; i < n; ++i)
@@ -230,8 +277,13 @@ void EngineCore::process(const float* in, float* out, int numFrames)
     mOutputGain = outTarget;
   }
 
-  updatePeak(mInputPeak, inPeak);
-  updatePeak(mOutputPeak, outPeak);
+  updateMax(mInputPeak, inPeak);
+  updateMax(mOutputPeak, outPeak);
+  if (numFrames > 0)
+  {
+    const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    updateMax(mCpuLoad, static_cast<float>(elapsed / (numFrames / mSampleRate)));
+  }
 
   mProcessSeq.fetch_add(1); // even again: "audio thread idle"
 }

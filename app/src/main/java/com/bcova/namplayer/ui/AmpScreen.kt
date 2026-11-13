@@ -24,10 +24,17 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
@@ -35,6 +42,12 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -45,26 +58,29 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import com.bcova.namplayer.t3k.TargetSlot
+import com.bcova.namplayer.t3k.BlockKind
+import com.bcova.namplayer.t3k.BlockTarget
 import kotlin.math.roundToInt
 
 /**
- * The player: a vertical signal chain (input → amp → cab → output) plus levels and volume.
+ * The player: a vertical signal chain (input → blocks… → output) plus levels and volume.
  * Each block is where you add or change a tone (TONE3000 design rule 1: the entry point).
  */
 @Composable
-fun PlayerScreen(vm: AmpViewModel, onBrowse: (TargetSlot) -> Unit, signedIn: Boolean, onSignOut: () -> Unit) {
+fun PlayerScreen(vm: AmpViewModel, onBrowse: (BlockTarget) -> Unit, signedIn: Boolean, onSignOut: () -> Unit) {
     val context = LocalContext.current
+    var showAddSheet by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) vm.toggleAudio()
     }
+    // Which block the phone file picker is choosing for.
+    var pickingFor by rememberSaveable { mutableStateOf<Long?>(null) }
     // .nam has no standard file type, so allow any file and check the extension after picking.
-    val modelPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let { vm.load(vm.model, it) }
-    }
-    val irPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let { vm.load(vm.ir, it) }
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val block = vm.blocks.firstOrNull { it.id == pickingFor }
+        if (uri != null && block != null) vm.loadFromPhone(block, uri)
+        pickingFor = null
     }
 
     Column(
@@ -96,27 +112,37 @@ fun PlayerScreen(vm: AmpViewModel, onBrowse: (TargetSlot) -> Unit, signedIn: Boo
 
         Meter("In", vm.inputLevelDb)
 
+        vm.blocks.forEachIndexed { index, block ->
+            ChainArrow()
+            key(block.id) {
+                SignalBlock(
+                    block = block,
+                    isFirst = index == 0,
+                    isLast = index == vm.blocks.lastIndex,
+                    onBrowse = { onBrowse(BlockTarget(block.id, block.kind)) },
+                    onPhoneFile = {
+                        pickingFor = block.id
+                        filePicker.launch(arrayOf("*/*"))
+                    },
+                    onToggle = { vm.setEnabled(block, it) },
+                    onMove = { vm.move(block, it) },
+                    onClear = { vm.clearBlock(block) },
+                    onRemove = { vm.removeBlock(block) },
+                )
+            }
+        }
         ChainArrow()
-        SignalBlock(
-            slot = vm.model,
-            emptyHint = "Add an amp, pedal or full rig",
-            onBrowse = { onBrowse(TargetSlot.AMP) },
-            onPhoneFile = { modelPicker.launch(arrayOf("*/*")) },
-            onToggle = { vm.setEnabled(vm.model, it) },
-            onRemove = { vm.clear(vm.model) },
-        )
-        ChainArrow()
-        SignalBlock(
-            slot = vm.ir,
-            emptyHint = "Add a cabinet IR (skip for Amp + Cab tones)",
-            onBrowse = { onBrowse(TargetSlot.CAB) },
-            onPhoneFile = { irPicker.launch(arrayOf("audio/*", "audio/wav", "audio/x-wav")) },
-            onToggle = { vm.setEnabled(vm.ir, it) },
-            onRemove = { vm.clear(vm.ir) },
-        )
-        ChainArrow()
+        if (vm.canAddBlock) {
+            OutlinedButton(onClick = { showAddSheet = true }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                Icon(Icons.Default.Add, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Add block")
+            }
+            ChainArrow()
+        }
 
         Meter("Out", vm.outputLevelDb)
+        CpuMeter(vm.cpuLoad, vm.running)
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -141,6 +167,60 @@ fun PlayerScreen(vm: AmpViewModel, onBrowse: (TargetSlot) -> Unit, signedIn: Boo
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+
+    if (showAddSheet) {
+        AddBlockSheet(
+            onDismiss = { showAddSheet = false },
+            onPick = { kind ->
+                showAddSheet = false
+                vm.addBlock(kind)?.let { onBrowse(BlockTarget(it.id, it.kind)) }
+            },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AddBlockSheet(onDismiss: () -> Unit, onPick: (BlockKind) -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(bottom = 24.dp)) {
+            Text(
+                "Add a block",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+            )
+            BlockKind.entries.forEach { kind ->
+                Column(
+                    Modifier.fillMaxWidth().clickable { onPick(kind) }.padding(horizontal = 20.dp, vertical = 12.dp),
+                ) {
+                    Text(kind.label, style = MaterialTheme.typography.titleSmall)
+                    Text(kind.hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Text(
+                "Each capture uses phone power. Watch the CPU meter: near 100% the sound will crackle.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CpuMeter(load: Float, running: Boolean) {
+    val pct = (load * 100).roundToInt()
+    val color = when {
+        load > 0.85f -> MaterialTheme.colorScheme.error
+        load > 0.6f -> Color(0xFFFDD835)
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Text(
+        if (running) "CPU $pct%" + (if (load > 0.85f) " · too high, use fewer or lighter captures" else "") else "CPU –",
+        style = MaterialTheme.typography.labelMedium,
+        color = color,
+    )
 }
 
 @Composable
@@ -153,25 +233,39 @@ private fun ChainArrow() {
 /** One block in the signal chain. Shows the loaded TONE3000 tone with its image and T3K mark (design rule 5). */
 @Composable
 private fun SignalBlock(
-    slot: SlotState,
-    emptyHint: String,
+    block: ChainBlock,
+    isFirst: Boolean,
+    isLast: Boolean,
     onBrowse: () -> Unit,
     onPhoneFile: () -> Unit,
     onToggle: (Boolean) -> Unit,
+    onMove: (Int) -> Unit,
+    onClear: () -> Unit,
     onRemove: () -> Unit,
 ) {
-    val tone = slot.tone
+    val tone = block.tone
+    var menuOpen by remember { mutableStateOf(false) }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(slot.label.uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                if (slot.loading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                if (slot.fileName != null) Switch(checked = slot.enabled, onCheckedChange = onToggle)
+                Text(block.kind.label.uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                if (block.loading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                if (!block.isEmpty) Switch(checked = block.enabled, onCheckedChange = onToggle)
+                Box {
+                    IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Block options") }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        if (!isFirst) DropdownMenuItem(text = { Text("Move up") }, onClick = { menuOpen = false; onMove(-1) })
+                        if (!isLast) DropdownMenuItem(text = { Text("Move down") }, onClick = { menuOpen = false; onMove(1) })
+                        DropdownMenuItem(text = { Text("Load from phone") }, onClick = { menuOpen = false; onPhoneFile() })
+                        if (!block.isEmpty) DropdownMenuItem(text = { Text("Empty this block") }, onClick = { menuOpen = false; onClear() })
+                        DropdownMenuItem(text = { Text("Remove block") }, onClick = { menuOpen = false; onRemove() })
+                    }
+                }
             }
 
             when {
                 tone != null -> Row(
-                    Modifier.clickable(onClick = onBrowse).alpha(if (slot.enabled) 1f else 0.4f),
+                    Modifier.clickable(onClick = onBrowse).alpha(if (block.enabled) 1f else 0.4f),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Box {
@@ -201,12 +295,12 @@ private fun SignalBlock(
                         )
                     }
                 }
-                slot.fileName != null -> Text(
-                    slot.fileName!!,
+                !block.isEmpty -> Text(
+                    block.fileName ?: "",
                     style = MaterialTheme.typography.titleMedium,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.alpha(if (slot.enabled) 1f else 0.4f),
+                    modifier = Modifier.alpha(if (block.enabled) 1f else 0.4f),
                 )
                 else -> Row(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick = onBrowse)
@@ -215,15 +309,11 @@ private fun SignalBlock(
                 ) {
                     Icon(Icons.Default.Add, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text(emptyHint, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(block.kind.hint, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
             BrowseT3kButton(onClick = onBrowse, modifier = Modifier.fillMaxWidth(), fullLogo = true)
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = onPhoneFile, enabled = !slot.loading) { Text("Load from phone") }
-                if (slot.fileName != null) TextButton(onClick = onRemove, enabled = !slot.loading) { Text("Remove") }
-            }
         }
     }
 }

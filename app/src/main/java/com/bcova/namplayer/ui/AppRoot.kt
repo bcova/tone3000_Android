@@ -14,7 +14,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.bcova.namplayer.t3k.Tone
 
 @Composable
 fun AppRoot(amp: AmpViewModel = viewModel(), t3k: T3kViewModel = viewModel()) {
@@ -34,11 +33,11 @@ fun AppRoot(amp: AmpViewModel = viewModel(), t3k: T3kViewModel = viewModel()) {
                 is Screen.Library -> LibraryScreen(s.target, t3k)
                 is Screen.Search -> SearchScreen(s.target, t3k)
                 is Screen.ToneDetail -> ToneDetailScreen(t3k, onInstall = {
-                    t3k.installSelected { file, tone, model ->
-                        // The tone's format decides the slot: IRs go to the cabinet, NAM to the amp.
-                        val slot = if (tone.format == Tone.FORMAT_IR) amp.ir else amp.model
+                    t3k.installSelected { file, tone, model, target ->
+                        // Load into the block the user was choosing for.
                         amp.loadFile(
-                            slot,
+                            target.blockId,
+                            target.kind,
                             file,
                             LoadedTone(
                                 toneId = tone.id,

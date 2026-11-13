@@ -31,14 +31,11 @@ object T3kConfig {
 /** Why a sign-in was started, so we know what to do when the user comes back. */
 enum class AuthPurpose { SIGN_IN, SELECT_TONE }
 
-/** What the user picked the tone for. */
-enum class TargetSlot { AMP, CAB }
-
 class PendingAuth(
     val verifier: String,
     val state: String,
     val purpose: AuthPurpose,
-    val target: TargetSlot,
+    val target: BlockTarget,
 )
 
 /** Stores tokens and the in-progress sign-in in app-private storage. */
@@ -68,7 +65,8 @@ class TokenStore(context: Context) {
         putString(KEY_P_VERIFIER, p.verifier)
         putString(KEY_P_STATE, p.state)
         putString(KEY_P_PURPOSE, p.purpose.name)
-        putString(KEY_P_TARGET, p.target.name)
+        putLong(KEY_P_BLOCK, p.target.blockId)
+        putString(KEY_P_KIND, p.target.kind.name)
     }
 
     fun takePending(): PendingAuth? {
@@ -78,14 +76,17 @@ class TokenStore(context: Context) {
             state = prefs.getString(KEY_P_STATE, "") ?: "",
             purpose = runCatching { AuthPurpose.valueOf(prefs.getString(KEY_P_PURPOSE, "")!!) }
                 .getOrDefault(AuthPurpose.SIGN_IN),
-            target = runCatching { TargetSlot.valueOf(prefs.getString(KEY_P_TARGET, "")!!) }
-                .getOrDefault(TargetSlot.AMP),
+            target = BlockTarget(
+                blockId = prefs.getLong(KEY_P_BLOCK, -1L),
+                kind = runCatching { BlockKind.valueOf(prefs.getString(KEY_P_KIND, "")!!) }.getOrDefault(BlockKind.ANY),
+            ),
         )
         prefs.edit {
             remove(KEY_P_VERIFIER)
             remove(KEY_P_STATE)
             remove(KEY_P_PURPOSE)
-            remove(KEY_P_TARGET)
+            remove(KEY_P_BLOCK)
+            remove(KEY_P_KIND)
         }
         return pending
     }
@@ -97,7 +98,8 @@ class TokenStore(context: Context) {
         const val KEY_P_VERIFIER = "pending_verifier"
         const val KEY_P_STATE = "pending_state"
         const val KEY_P_PURPOSE = "pending_purpose"
-        const val KEY_P_TARGET = "pending_target"
+        const val KEY_P_BLOCK = "pending_block"
+        const val KEY_P_KIND = "pending_kind"
     }
 }
 
@@ -128,10 +130,10 @@ fun buildAuthorizeUrl(pending: PendingAuth): Uri {
     if (pending.purpose == AuthPurpose.SELECT_TONE) {
         builder.appendQueryParameter("prompt", "select_tone")
             .appendQueryParameter("preview", "true") // let users hear demos before picking
-        when (pending.target) {
-            TargetSlot.AMP -> builder.appendQueryParameter("format", Tone.FORMAT_NAM)
-            TargetSlot.CAB -> builder.appendQueryParameter("format", Tone.FORMAT_IR)
-        }
+        // Show tones that fit the block being filled (e.g. only pedals for a Pedal block).
+        val kind = pending.target.kind
+        kind.format?.let { builder.appendQueryParameter("format", it) }
+        if (kind.gears.isNotEmpty()) builder.appendQueryParameter("gears", kind.gears.sorted().joinToString("_"))
     }
     return builder.build()
 }

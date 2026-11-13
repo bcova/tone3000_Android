@@ -61,7 +61,7 @@ import androidx.compose.ui.unit.dp
 import com.bcova.namplayer.t3k.Option
 import com.bcova.namplayer.t3k.SearchFilters
 import com.bcova.namplayer.t3k.SearchOptions
-import com.bcova.namplayer.t3k.TargetSlot
+import com.bcova.namplayer.t3k.BlockTarget
 import java.text.NumberFormat
 
 /** Which filter sheet is open. */
@@ -73,7 +73,7 @@ private enum class Sheet { SORT, GEAR, SIZE, FORMAT, TAGS, MAKES }
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SearchScreen(target: TargetSlot, vm: T3kViewModel) {
+fun SearchScreen(target: BlockTarget, vm: T3kViewModel) {
     val f = vm.filters
     val focus = LocalFocusManager.current
     val focusRequester = remember { FocusRequester() }
@@ -115,7 +115,7 @@ fun SearchScreen(target: TargetSlot, vm: T3kViewModel) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                if (target == TargetSlot.AMP) "Choosing an amp" else "Choosing a cabinet",
+                choosingLabel(target.kind).replaceFirstChar { it.uppercase() },
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),

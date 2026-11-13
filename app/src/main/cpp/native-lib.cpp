@@ -5,6 +5,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "AudioEngine.h"
 
@@ -60,24 +61,27 @@ JNIEXPORT jstring JNICALL JNI_FN(statusText)(JNIEnv* env, jobject)
   return env->NewStringUTF(engine().statusText().c_str());
 }
 
-JNIEXPORT jstring JNICALL JNI_FN(loadModel)(JNIEnv* env, jobject, jstring path)
+JNIEXPORT jstring JNICALL JNI_FN(loadBlock)(JNIEnv* env, jobject, jlong id, jstring path)
 {
-  return errorOrNull(env, engine().core().loadModel(toStdString(env, path)));
+  return errorOrNull(env, engine().core().loadBlock(id, toStdString(env, path)));
 }
 
-JNIEXPORT jstring JNICALL JNI_FN(loadIr)(JNIEnv* env, jobject, jstring path)
+JNIEXPORT void JNICALL JNI_FN(removeBlock)(JNIEnv*, jobject, jlong id)
 {
-  return errorOrNull(env, engine().core().loadIr(toStdString(env, path)));
+  engine().core().removeBlock(id);
 }
 
-JNIEXPORT void JNICALL JNI_FN(clearModel)(JNIEnv*, jobject)
+JNIEXPORT void JNICALL JNI_FN(setOrder)(JNIEnv* env, jobject, jlongArray ids)
 {
-  engine().core().clearModel();
+  const jsize n = env->GetArrayLength(ids);
+  std::vector<int64_t> order(static_cast<size_t>(n));
+  env->GetLongArrayRegion(ids, 0, n, reinterpret_cast<jlong*>(order.data()));
+  engine().core().setOrder(order);
 }
 
-JNIEXPORT void JNICALL JNI_FN(clearIr)(JNIEnv*, jobject)
+JNIEXPORT void JNICALL JNI_FN(setBlockEnabled)(JNIEnv*, jobject, jlong id, jboolean enabled)
 {
-  engine().core().clearIr();
+  engine().core().setBlockEnabled(id, enabled == JNI_TRUE);
 }
 
 JNIEXPORT void JNICALL JNI_FN(setInputGainDb)(JNIEnv*, jobject, jfloat db)
@@ -88,16 +92,6 @@ JNIEXPORT void JNICALL JNI_FN(setInputGainDb)(JNIEnv*, jobject, jfloat db)
 JNIEXPORT void JNICALL JNI_FN(setOutputGainDb)(JNIEnv*, jobject, jfloat db)
 {
   engine().core().setOutputGainDb(db);
-}
-
-JNIEXPORT void JNICALL JNI_FN(setModelEnabled)(JNIEnv*, jobject, jboolean enabled)
-{
-  engine().core().setModelEnabled(enabled == JNI_TRUE);
-}
-
-JNIEXPORT void JNICALL JNI_FN(setIrEnabled)(JNIEnv*, jobject, jboolean enabled)
-{
-  engine().core().setIrEnabled(enabled == JNI_TRUE);
 }
 
 JNIEXPORT void JNICALL JNI_FN(setNormalize)(JNIEnv*, jobject, jboolean enabled)
@@ -113,6 +107,11 @@ JNIEXPORT jfloat JNICALL JNI_FN(takeInputPeak)(JNIEnv*, jobject)
 JNIEXPORT jfloat JNICALL JNI_FN(takeOutputPeak)(JNIEnv*, jobject)
 {
   return engine().core().takeOutputPeak();
+}
+
+JNIEXPORT jfloat JNICALL JNI_FN(takeCpuLoad)(JNIEnv*, jobject)
+{
+  return engine().core().takeCpuLoad();
 }
 
 } // extern "C"
