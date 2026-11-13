@@ -3,6 +3,15 @@
 
     <!-- Needed to hear your guitar through the phone or a USB audio interface. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- TONE3000 sign-in, tone lists and downloads. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Lets the app find a browser that supports Custom Tabs (Android 11+ package visibility). -->
+    <queries>
+        <intent>
+            <action android:name="android.support.customtabs.action.CustomTabsService" />
+        </intent>
+    </queries>
 
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:name="android.hardware.audio.low_latency" android:required="false" />
@@ -15,10 +24,18 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:screenOrientation="unspecified">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- TONE3000 sends the user back here after sign-in: com.bcova.namplayer://callback -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="com.bcova.namplayer" android:host="callback" />
             </intent-filter>
         </activity>
     </application>

@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
@@ -14,7 +15,12 @@ android {
         minSdk = 26 // Android 8.0: AAudio low-latency audio
         targetSdk = 35
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = "0.2.0"
+
+        // TONE3000 publishable key (client_id). Safe to ship in the app, per TONE3000's docs.
+        // Set in gradle.properties as t3kClientId. NEVER put the secret key (t3k_cs_…) here.
+        val t3kClientId = (project.findProperty("t3kClientId") as String?).orEmpty()
+        buildConfigField("String", "T3K_CLIENT_ID", "\"$t3kClientId\"")
 
         ndk {
             // arm64 = real phones; x86_64 = the Android Studio emulator.
@@ -43,6 +49,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
         prefab = true // lets CMake find Oboe from the Gradle dependency
     }
 
@@ -65,5 +72,9 @@ dependencies {
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.browser)
+    implementation(libs.coil.compose)
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.kotlinx.coroutines.android)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

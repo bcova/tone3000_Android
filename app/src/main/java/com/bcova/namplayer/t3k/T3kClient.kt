@@ -1,0 +1,186 @@
+package com.bcova.namplayer.t3k
+
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import java.io.File
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+
+/** A problem talking to TONE3000, with a message that's safe to show the user. */
+class T3kException(message: String, val status: Int = 0) : IOException(message)
+
+/** Signed out (refresh token expired or revoked): the user has to sign in again. */
+class SignedOutException : IOException("Please sign in to TONE3000 again.")
+
+/**
+ * Talks to the TONE3000 API.
+ *
+ * Free-tier rules (https://www.tone3000.com/api#commercial-terms): this app only uses the
+ * OAuth prompt flows plus the bounded lists (favorited, downloaded, created, trending, latest),
+ * and the tone/model lookups those flows need. It does NOT use catalog search.
+ */
+class T3kClient(private val tokens: TokenStore) {
+
+    private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
+    private val refreshLock = Mutex()
+
+    // ---- Auth
+
+    suspend fun exchangeCode(code: String, verifier: String) {
+        val session: Session = postForm(
+            "/api/v1/oauth/token",
+            mapOf(
+                "grant_type" to "authorization_code",
+                "code" to code,
+                "code_verifier" to verifier,
+                "redirect_uri" to T3kConfig.REDIRECT_URI,
+                "client_id" to T3kConfig.CLIENT_ID,
+            ),
+        )
+        tokens.save(session)
+    }
+
+    fun signOut() = tokens.clearTokens()
+
+    // ---- Endpoints
+
+    suspend fun currentUser(): T3kUser = get("/api/v1/user")
+
+    suspend fun favorited(page: Int = 1): Paginated<Tone> = get("/api/v1/tones/favorited?page=$page&page_size=25")
+    suspend fun downloaded(page: Int = 1): Paginated<Tone> = get("/api/v1/tones/downloaded?page=$page&page_size=25")
+    suspend fun created(page: Int = 1): Paginated<Tone> = get("/api/v1/tones/created?page=$page&page_size=25")
+    suspend fun trending(): List<Tone> = get<DataList<Tone>>("/api/v1/tones/trending").data
+    suspend fun latest(): List<Tone> = get<DataList<Tone>>("/api/v1/tones/latest").data
+
+    suspend fun tone(id: Long): Tone = get("/api/v1/tones/$id")
+
+    /**
+     * All playable models of a tone. TONE3000 hides newer "A2" models unless asked, and
+     * this app supports them (they're also lighter on the CPU), so fetch both and merge.
+     */
+    suspend fun models(tone: Tone): List<ToneModel> {
+        val legacy = get<Paginated<ToneModel>>("/api/v1/models?tone_id=${tone.id}&page_size=300").data
+        if (tone.format != Tone.FORMAT_NAM || tone.a2ModelsCount == 0) return legacy
+        val a2 = get<Paginated<ToneModel>>("/api/v1/models?tone_id=${tone.id}&page_size=300&architecture=2").data
+        return (a2 + legacy).distinctBy { it.id }
+    }
+
+    /** Downloads a model file (needs the access token). */
+    suspend fun download(model: ToneModel, dest: File) = withContext(Dispatchers.IO) {
+        val conn = open(model.modelUrl, authorized = true)
+        try {
+            checkStatus(conn)
+            dest.parentFile?.mkdirs()
+            val tmp = File(dest.path + ".part")
+            conn.inputStream.use { input -> tmp.outputStream().use { input.copyTo(it) } }
+            if (!tmp.renameTo(dest)) throw T3kException("Could not save the downloaded file.")
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    // ---- Plumbing
+
+    private suspend inline fun <reified T> get(path: String): T = withContext(Dispatchers.IO) {
+        var conn = open(T3kConfig.BASE_URL + path, authorized = true)
+        try {
+            if (conn.responseCode == 401) {
+                // Token may have been revoked early: refresh once and retry.
+                conn.disconnect()
+                refresh(force = true)
+                conn = open(T3kConfig.BASE_URL + path, authorized = true)
+            }
+            checkStatus(conn)
+            json.decodeFromString<T>(conn.inputStream.bufferedReader().use { it.readText() })
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private suspend inline fun <reified T> postForm(path: String, form: Map<String, String>): T =
+        withContext(Dispatchers.IO) {
+            val conn = (URL(T3kConfig.BASE_URL + path).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = TIMEOUT_MS
+                readTimeout = TIMEOUT_MS
+                setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+                setRequestProperty("Accept", "application/json")
+            }
+            try {
+                val body = form.entries.joinToString("&") { (k, v) ->
+                    "${URLEncoder.encode(k, "UTF-8")}=${URLEncoder.encode(v, "UTF-8")}"
+                }
+                conn.outputStream.use { it.write(body.toByteArray()) }
+                checkStatus(conn)
+                json.decodeFromString<T>(conn.inputStream.bufferedReader().use { it.readText() })
+            } finally {
+                conn.disconnect()
+            }
+        }
+
+    private suspend fun open(url: String, authorized: Boolean): HttpURLConnection {
+        val token = if (authorized) validAccessToken() else null
+        return (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = TIMEOUT_MS
+            readTimeout = TIMEOUT_MS
+            setRequestProperty("Accept", "application/json")
+            if (token != null) setRequestProperty("Authorization", "Bearer $token")
+        }
+    }
+
+    private suspend fun validAccessToken(): String {
+        val token = tokens.accessToken
+        if (token != null && System.currentTimeMillis() < tokens.expiresAtMillis) return token
+        refresh(force = false)
+        return tokens.accessToken ?: throw SignedOutException()
+    }
+
+    private suspend fun refresh(force: Boolean) = refreshLock.withLock {
+        // Another request may have refreshed while we waited for the lock.
+        if (!force && tokens.accessToken != null && System.currentTimeMillis() < tokens.expiresAtMillis) {
+            return@withLock
+        }
+        val refreshToken = tokens.refreshToken ?: throw SignedOutException()
+        try {
+            val session: Session = postForm(
+                "/api/v1/oauth/token",
+                mapOf(
+                    "grant_type" to "refresh_token",
+                    "refresh_token" to refreshToken,
+                    "client_id" to T3kConfig.CLIENT_ID,
+                ),
+            )
+            tokens.save(session)
+        } catch (e: T3kException) {
+            if (e.status == 400 || e.status == 401) {
+                tokens.clearTokens() // refresh token expired: sign in again
+                throw SignedOutException()
+            }
+            throw e
+        }
+    }
+
+    private fun checkStatus(conn: HttpURLConnection) {
+        val code = conn.responseCode
+        if (code in 200..299) return
+        val message = when (code) {
+            401 -> "TONE3000 sign-in expired."
+            403 -> "TONE3000 didn't allow this request."
+            404 -> "That tone isn't available (it may be private or deleted)."
+            429 -> "Too many requests to TONE3000. Wait a minute and try again."
+            in 500..599 -> "TONE3000 is having trouble right now. Try again later."
+            else -> "TONE3000 request failed (HTTP $code)."
+        }
+        throw T3kException(message, code)
+    }
+
+    private companion object {
+        const val TIMEOUT_MS = 20_000
+    }
+}

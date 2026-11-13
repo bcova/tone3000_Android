@@ -20,9 +20,21 @@ import java.io.File
 import kotlin.math.log10
 import kotlin.math.max
 
+/** A tone loaded from TONE3000, shown on its signal-chain block (TONE3000 design rule 5). */
+data class LoadedTone(
+    val toneId: Long,
+    val title: String,
+    val imageUrl: String?,
+    val gearLabel: String,
+    val formatLabel: String,
+    val creator: String,
+    val modelName: String,
+)
+
 /** One loadable slot in the signal chain: the amp model or the cabinet IR. */
 class SlotState(val label: String, val extension: String) {
     var fileName by mutableStateOf<String?>(null)
+    var tone by mutableStateOf<LoadedTone?>(null) // null when loaded from a phone file
     var enabled by mutableStateOf(true)
     var loading by mutableStateOf(false)
 }
@@ -98,10 +110,29 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
     fun clear(slot: SlotState) {
         if (slot === model) NativeAudio.clearModel() else NativeAudio.clearIr()
         slot.fileName = null
+        slot.tone = null
     }
 
     fun dismissMessage() {
         message = null
+    }
+
+    /** Loads a file that's already on disk (e.g. downloaded from TONE3000). Returns an error or null. */
+    suspend fun loadFile(slot: SlotState, file: File, tone: LoadedTone?): String? {
+        slot.loading = true
+        try {
+            val error = withContext(Dispatchers.IO) {
+                if (slot === model) NativeAudio.loadModel(file.path) else NativeAudio.loadIr(file.path)
+            }
+            if (error == null) {
+                slot.fileName = tone?.modelName ?: file.name
+                slot.tone = tone
+                if (!slot.enabled) setEnabled(slot, true)
+            }
+            return error
+        } finally {
+            slot.loading = false
+        }
     }
 
     /** Copies the picked file into app storage (C++ needs a real file path), then loads it. */
@@ -126,7 +157,12 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
                 }.getOrElse { null to (it.message ?: "Could not read the file.") }
             }
             val (name, error) = result
-            if (error == null) slot.fileName = name else message = error
+            if (error == null) {
+                slot.fileName = name
+                slot.tone = null
+            } else {
+                message = error
+            }
             slot.loading = false
         }
     }

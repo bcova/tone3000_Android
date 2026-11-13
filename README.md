@@ -3,8 +3,8 @@
 A free Android app that plays **NAM (Neural Amp Modeler)** amp captures and **cabinet IRs**
 — the same kinds of tones you find on [TONE3000](https://www.tone3000.com).
 
-> **Status:** steps 1–3 done (audio engine + loading files from your phone).
-> TONE3000 sign-in and in-app browsing come next (see [Roadmap](#roadmap)).
+> **Status:** steps 1–5 done: audio engine, loading files from your phone, and
+> TONE3000 sign-in + browsing with a vertical, phone-first interface.
 
 ```
 guitar ─► USB interface ─► input gain ─► NAM amp model (.nam) ─► cabinet IR (.wav) ─► output volume ─► headphones
@@ -46,7 +46,15 @@ If you skip this, the build stops with a message telling you to run that command
 
 ## Getting tones
 
-For now, download files from [tone3000.com](https://www.tone3000.com) to your phone, then load them in the app:
+**From TONE3000 (easiest):** tap **Browse TONE3000** on the Amp or Cabinet block.
+1. The first time, a short "partnered with TONE3000" screen appears. Tap **Continue** and sign in
+   with your TONE3000 email (they send a 6-digit code).
+2. Pick a tone on TONE3000's page, or close it to see **Your Tones**:
+   Favorites · Downloaded · Created · Trending · Latest.
+3. On the tone's page, choose a model (e.g. Clean / Crunch / Lead) and tap **Load**.
+   The app downloads it and loads it into the right block automatically (NAM → amp, IR → cabinet).
+
+**From your phone:** tap **Load from phone** on a block and pick a file:
 
 - **Amp model:** a `.nam` file.
 - **Cabinet IR:** a `.wav` file. Skip this if the capture is "Amp + Cab" or "Full Rig", since the cabinet is already included.
@@ -64,7 +72,8 @@ for older phones. If you hear crackles, try a lighter capture.
 | `app/src/main/cpp/native-lib.cpp` | Bridge between Kotlin and C++ (JNI). |
 | `app/src/main/cpp/nam.cmake` | Builds NeuralAmpModelerCore. |
 | `app/src/main/java/.../audio/NativeAudio.kt` | Kotlin view of the C++ engine. |
-| `app/src/main/java/.../ui/` | The screen (Jetpack Compose) and its logic (ViewModel). |
+| `app/src/main/java/.../t3k/` | TONE3000 API: sign-in (OAuth + PKCE), tone lists, model downloads. |
+| `app/src/main/java/.../ui/` | Screens (Jetpack Compose) and their logic (ViewModels). |
 | `native-tests/` | Desktop tests for the engine. |
 | `third_party/NeuralAmpModelerCore` | The NAM engine (submodule). |
 
@@ -103,18 +112,23 @@ clean, measure speed, and swap models while audio is running.
 - [x] 1. Android project skeleton
 - [x] 2. Low-latency audio (Oboe) + NAM engine
 - [x] 3. Load `.nam` and IR `.wav` files from the phone
-- [ ] 4. TONE3000 sign-in + "Select" flow (OAuth with PKCE via Chrome Custom Tabs)
-- [ ] 5. Screens that follow TONE3000's [design requirements](https://www.tone3000.com/api#design-requirements)
+- [x] 4. TONE3000 sign-in + "Select" flow (OAuth with PKCE via Chrome Custom Tabs)
+- [x] 5. Screens that follow TONE3000's [design requirements](https://www.tone3000.com/api#design-requirements)
 
-Ideas after that: noise gate, choosing the input/output device, remembering the last tone, tuner.
+Ideas next: remember the last tone between launches, noise gate, choose input/output device, tuner.
 
-### TONE3000 API notes (for steps 4–5)
+### TONE3000 integration notes
 
 - This is a **free, non-commercial** app, so it uses TONE3000's **free tier**: no paid features or upsells.
   The free tier may only use the OAuth prompt flows (`select_tone`, `load_tone`) and the
   bounded lists (favorited, downloaded, created, trending, latest). No sign-off from TONE3000 is needed,
   but access can be revoked if the guidelines aren't followed.
-- Only the **publishable key** (`client_id`) goes in the app. **Never** put the secret key (`t3k_cs_…`) in the app.
+- Only the **publishable key** (`client_id`) goes in the app: it's `t3kClientId` in `gradle.properties`.
+  **Never** put the secret key (`t3k_cs_…`) in the app or the repo.
+- The redirect URI `com.bcova.namplayer://callback` must be registered in your TONE3000 API settings.
+- Logos in `res/drawable-nodpi/` are TONE3000's official assets from their API page. The full logo is shown at
+  entry points, and the compact T3K mark only after it (design rule 7).
+- The app asks for newer **A2** models too (TONE3000 hides them by default). They're lighter on phones.
 - Rate limit: 100 requests per minute.
 
 ## License
