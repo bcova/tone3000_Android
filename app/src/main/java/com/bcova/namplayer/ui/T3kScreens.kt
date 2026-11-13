@@ -85,8 +85,8 @@ fun PartnershipScreen(target: BlockTarget, vm: T3kViewModel) {
         Text("powered by", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 8.dp))
         T3kLogo(height = 40.dp)
         Spacer(Modifier.height(32.dp))
-        // Wording avoids implying an official partnership, which TONE3000's API terms
-        // say needs their written approval.
+        // TONE3000 asked for "Powered by TONE3000", not "partnered", unless a formal
+        // partnership agreement exists (their email, Nov 2026; also in their API terms).
         Text(
             "Get access to TONE3000's massive library of NAM captures and IRs of real analog gear, " +
                 "created by a global community of musicians.",

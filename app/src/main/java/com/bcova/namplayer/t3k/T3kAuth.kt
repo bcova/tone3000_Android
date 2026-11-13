@@ -21,9 +21,9 @@ object T3kConfig {
     val CLIENT_ID: String = BuildConfig.T3K_CLIENT_ID
 
     /**
-     * In-app full catalog search uses TONE3000 endpoints reserved for approved/commercial apps.
-     * OK for personal development and testing; turn OFF (gradle.properties) before sharing the
-     * app unless TONE3000 has approved it in writing.
+     * In-app full catalog search uses TONE3000 endpoints reserved for approved apps.
+     * TONE3000 approved this app by email (November 2026), on the condition that it's branded
+     * "Powered by TONE3000". Controlled by t3kFullCatalogSearch in gradle.properties.
      */
     val FULL_CATALOG_SEARCH: Boolean = BuildConfig.T3K_FULL_CATALOG_SEARCH
 }

@@ -52,7 +52,7 @@ If you skip this, the build stops with a message telling you to run that command
 ## Getting tones
 
 **From TONE3000 (easiest):** tap **Browse TONE3000** on the Amp or Cabinet block.
-1. The first time, a short "partnered with TONE3000" screen appears. Tap **Continue** and sign in
+1. The first time, a short "powered by TONE3000" welcome screen appears. Tap **Continue** and sign in
    with your TONE3000 email (they send a 6-digit code).
 2. Pick a tone on TONE3000's page, or close it to see **Your Tones**:
    Favorites · Downloaded · Created · Trending · Latest.
@@ -61,7 +61,7 @@ If you skip this, the build stops with a message telling you to run that command
 
 **Search the whole catalog:** in Your Tones, tap the search box. Type words (e.g. "plexi") and narrow
 results with filters: sort, format (NAM/IR), gear type, model size, tags, makes (brands and models),
-A2 only, calibrated, and verified creators. See the important note below before sharing the app.
+A2 only, calibrated, and verified creators.
 
 **From your phone:** tap **Load from phone** on a block and pick a file:
 
@@ -126,25 +126,29 @@ clean, measure speed, and swap models while audio is running.
 
 Ideas next: remember the last tone between launches, noise gate, choose input/output device, tuner.
 
-### ⚠️ Full catalog search: personal use only (for now)
+### ✅ Full catalog search: approved by TONE3000
 
 In-app search uses TONE3000 endpoints (`/tones/search`, `/tags`, `/makes`) that their
-[API terms](https://www.tone3000.com/api/terms) reserve for approved (commercial) apps. The terms also say
-*"Evaluating and developing against the API is free for everyone"*, so it's fine on your own phone.
+[API terms](https://www.tone3000.com/api/terms) normally reserve for approved (commercial) apps.
+**TONE3000 approved this app's use of those endpoints by email in November 2026.** Keep that email as the record.
 
-**Before sharing the app with anyone**, either:
-- get written permission from TONE3000 (support@tone3000.com), or
-- set `t3kFullCatalogSearch=false` in `gradle.properties` and rebuild. Search disappears, and the app
-  uses only free-tier features. Browsing the full catalog still works through TONE3000's own page.
+Conditions from that approval:
+- Branding must say **"Powered by TONE3000"**. Do **not** say "partnered with TONE3000" unless a formal
+  partnership agreement is made.
+- TONE3000 invited a test build or screenshots for them to look at. Send them before a public release.
+
+The switch `t3kFullCatalogSearch` in `gradle.properties` stays `true`. Setting it to `false` removes search
+from the app (only needed if the approval is ever withdrawn).
 
 ### TONE3000 integration notes
 
 - Tones are **Powered by [TONE3000](https://www.tone3000.com)**. The API terms require that label and this link.
 
-- This is a **free, non-commercial** app, so it uses TONE3000's **free tier**: no paid features or upsells.
-  The free tier may only use the OAuth prompt flows (`select_tone`, `load_tone`) and the
-  bounded lists (favorited, downloaded, created, trending, latest). No sign-off from TONE3000 is needed,
-  but access can be revoked if the guidelines aren't followed.
+- This is a **free, non-commercial** app: no paid features or upsells. Keep it that way. Charging money
+  would need a commercial agreement with TONE3000.
+- It uses the OAuth prompt flows (`select_tone`, `load_tone`), the bounded lists (favorited, downloaded,
+  created, trending, latest), and full-catalog search. The search part is covered by TONE3000's email approval
+  (see above). Access can be revoked if the guidelines aren't followed.
 - Only the **publishable key** (`client_id`) goes in the app: it's `t3kClientId` in `gradle.properties`.
   **Never** put the secret key (`t3k_cs_…`) in the app or the repo.
 - The redirect URI `com.bcova.namplayer://callback` must be registered in your TONE3000 API settings.

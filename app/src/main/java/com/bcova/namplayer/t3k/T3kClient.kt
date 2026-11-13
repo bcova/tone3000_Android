@@ -25,9 +25,9 @@ class SignedOutException : IOException("Please sign in to TONE3000 again.")
 /**
  * Talks to the TONE3000 API.
  *
- * Free-tier rules (https://www.tone3000.com/api#commercial-terms): this app only uses the
- * OAuth prompt flows plus the bounded lists (favorited, downloaded, created, trending, latest),
- * and the tone/model lookups those flows need. It does NOT use catalog search.
+ * Uses the OAuth prompt flows, the bounded lists (favorited, downloaded, created, trending,
+ * latest), tone/model lookups, and full-catalog search (/tones/search, /tags, /makes), which
+ * TONE3000 approved for this free app by email (Nov 2026). See README.
  */
 class T3kClient(private val tokens: TokenStore) {
 
@@ -64,8 +64,7 @@ class T3kClient(private val tokens: TokenStore) {
 
     suspend fun tone(id: String): Tone = get("/api/v1/tones/$id")
 
-    // ---- Full-catalog search (TONE3000 commercial tier; see SearchFilters.kt and README).
-    // Allowed for development/personal testing; needs TONE3000's written OK before sharing the app.
+    // ---- Full-catalog search (approved for this app by TONE3000 by email, Nov 2026; see README).
 
     suspend fun search(filters: SearchFilters, page: Int): Paginated<Tone> {
         requireFullSearch()
