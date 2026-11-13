@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <random>
 #include <string>
 #include <thread>
@@ -505,6 +506,155 @@ int main()
       f.read(riff, 4);
       CHECK(std::string(riff, 4) == "RIFF", "valid WAV header");
       CHECK(!core.recorder().recording(), "stopped");
+    }
+  }
+
+  std::printf("11) Metronome/drums, looper, backing track\n");
+  {
+    const int sec = static_cast<int>(kRate);
+    std::vector<float> silence(sec * 4, 0.0f), L(sec * 4), R(sec * 4);
+    auto run = [&](EngineCore& core, const std::vector<float>& in, int frames) {
+      for (int pos = 0; pos + 240 <= frames; pos += 240)
+        core.process(in.data() + pos, L.data() + pos, R.data() + pos, 240);
+    };
+    // --- Metronome: 120 bpm for 2 s = 4 clicks; the click is not recorded.
+    {
+      EngineCore core(kRate);
+      core.rhythm().setBpm(120);
+      core.rhythm().setPlaying(true);
+      const fs::path wav = tmp / "click.wav";
+      core.recorder().start(wav.string());
+      run(core, silence, 2 * sec);
+      core.recorder().stop();
+      // A click = a loud sample with no loud sample in the previous 50 ms.
+      int onsets = 0;
+      int lastLoud = -100000;
+      for (int i = 0; i < 2 * sec; ++i)
+      {
+        if (std::fabs(L[i]) > 0.05f)
+        {
+          if (i - lastLoud > static_cast<int>(0.05 * kRate))
+            ++onsets;
+          lastLoud = i;
+        }
+      }
+      std::printf("   metronome 120 bpm, 2 s: %d clicks\n", onsets);
+      CHECK(onsets == 4, "4 clicks in 2 seconds at 120 bpm");
+      std::ifstream f(wav, std::ios::binary);
+      std::vector<char> bytes((std::istreambuf_iterator<char>(f)), {});
+      bool allZero = true;
+      for (size_t i = 44; i < bytes.size(); ++i)
+        allZero = allZero && bytes[i] == 0;
+      CHECK(bytes.size() > 44 && allZero, "metronome click isn't in the recording");
+    }
+    // --- Drum loop sounds and is recorded.
+    {
+      EngineCore core(kRate);
+      core.rhythm().setStyle(ampengine::RhythmStyle::Rock);
+      core.rhythm().setPlaying(true);
+      run(core, silence, sec);
+      float peak = 0;
+      for (int i = 0; i < sec; ++i)
+        peak = std::max(peak, std::fabs(L[i]));
+      CHECK(peak > 0.1f && peak <= 1.0f, "rock drum loop plays");
+    }
+    // --- Looper: record 0.5 s, then it repeats; overdub; undo restores.
+    {
+      EngineCore core(kRate);
+      core.setNormalize(false);
+      auto& looper = core.looper();
+      looper.prepare();
+      const auto tone = sine(220.0, 0.3, sec * 4);
+      looper.command(ampengine::Looper::Command::Press); // record
+      run(core, tone, sec / 2);
+      looper.command(ampengine::Looper::Command::Press); // play
+      run(core, silence, sec); // input silent: what we hear is the loop
+      CHECK(looper.state() == ampengine::Looper::State::Playing, "looper playing");
+      CHECK(std::fabs(looper.lengthSeconds() - 0.5) < 0.01, "loop length 0.5 s");
+      float peak = 0, diff = 0;
+      for (int i = 0; i < sec / 2; ++i)
+      {
+        peak = std::max(peak, std::fabs(L[i]));
+        diff = std::max(diff, std::fabs(L[i] - L[i + sec / 2]));
+      }
+      CHECK(peak > 0.2f && diff < 1e-5f, "loop repeats exactly");
+      const float before = L[100];
+
+      looper.command(ampengine::Looper::Command::Press); // overdub
+      run(core, tone, sec / 2);
+      looper.command(ampengine::Looper::Command::Press); // back to play
+      run(core, silence, sec / 2);
+      CHECK(looper.layers() == 2, "two layers");
+      const float layered = L[100];
+      CHECK(std::fabs(layered - before) > 0.01f, "overdub changes the loop");
+
+      looper.command(ampengine::Looper::Command::Undo);
+      run(core, silence, sec); // undo runs over a few blocks
+      CHECK(std::fabs(L[100 + sec / 2] - before) < 1e-5f, "undo restores the first layer");
+      CHECK(looper.layers() == 1 && !looper.canUndo(), "undo used up");
+
+      looper.command(ampengine::Looper::Command::Clear);
+      run(core, silence, 2400);
+      CHECK(looper.state() == ampengine::Looper::State::Empty, "cleared");
+    }
+    // --- Looper snaps to whole bars when the metronome runs (120 bpm: 1 bar = 2 s).
+    {
+      EngineCore core(kRate);
+      core.looper().prepare();
+      core.rhythm().setBpm(120);
+      core.rhythm().setVolume(0);
+      core.rhythm().setPlaying(true);
+      core.looper().command(ampengine::Looper::Command::Press);
+      run(core, silence, static_cast<int>(1.7 * kRate));
+      core.looper().command(ampengine::Looper::Command::Press);
+      run(core, silence, 2400);
+      std::printf("   looper with metronome: recorded 1.7 s -> loop %.2f s\n", core.looper().lengthSeconds());
+      CHECK(std::fabs(core.looper().lengthSeconds() - 2.0) < 0.01, "loop snapped to one bar");
+    }
+    // --- Backing track: plays samples exactly, seeks, A-B loops, stops at the end.
+    {
+      const fs::path pcm = tmp / "track.pcm";
+      {
+        std::ofstream f(pcm, std::ios::binary);
+        for (int i = 0; i < 2 * sec; ++i)
+        {
+          const int16_t l = static_cast<int16_t>((i % 1000) * 10), r = static_cast<int16_t>(-(i % 1000) * 10);
+          f.write(reinterpret_cast<const char*>(&l), 2);
+          f.write(reinterpret_cast<const char*>(&r), 2);
+        }
+      }
+      EngineCore core(kRate);
+      auto& track = core.track();
+      CHECK(track.open(pcm.string()).empty(), "open track");
+      CHECK(std::fabs(track.durationSeconds() - 2.0) < 1e-6, "duration 2 s");
+      track.setVolume(1.0f);
+      std::this_thread::sleep_for(std::chrono::milliseconds(30)); // let the reader queue audio
+      track.setPlaying(true);
+      run(core, silence, 4800);
+      bool exact = true;
+      for (int i = 0; i < 4800; ++i)
+        exact = exact && std::fabs(L[i] - (i % 1000) * 10 / 32768.0f) < 1e-6f && std::fabs(R[i] + L[i]) < 1e-6f;
+      CHECK(exact, "track samples play exactly, in stereo");
+
+      track.seek(1.5);
+      std::this_thread::sleep_for(std::chrono::milliseconds(30));
+      run(core, silence, 2400);
+      const int at = static_cast<int>(1.5 * kRate);
+      CHECK(std::fabs(L[0] - (at % 1000) * 10 / 32768.0f) < 1e-6f, "seek lands on the right sample");
+
+      track.setLoop(0.5, 0.6); // a 0.1 s loop
+      std::this_thread::sleep_for(std::chrono::milliseconds(30));
+      run(core, silence, sec);
+      CHECK(track.positionSeconds() >= 0.5 && track.positionSeconds() <= 0.6 + 1e-3, "A-B loop keeps position inside the loop");
+      CHECK(track.playing(), "still playing while looping");
+
+      track.setLoop(0, 0);
+      track.seek(1.9);
+      std::this_thread::sleep_for(std::chrono::milliseconds(30));
+      run(core, silence, sec);
+      CHECK(!track.playing(), "stops at the end");
+      track.close();
+      CHECK(!track.loaded(), "closed");
     }
   }
 

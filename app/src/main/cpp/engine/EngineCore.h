@@ -35,7 +35,10 @@
 #include <vector>
 
 #include "Effects.h"
+#include "Looper.h"
 #include "Recorder.h"
+#include "Rhythm.h"
+#include "TrackPlayer.h"
 #include "Tuner.h"
 
 namespace nam
@@ -109,6 +112,10 @@ public:
   }
 
   Recorder& recorder() { return mRecorder; }
+  // Practice tools, mixed into the output after the rig.
+  Rhythm& rhythm() { return mRhythm; }
+  Looper& looper() { return mLooper; }
+  TrackPlayer& track() { return mTrack; }
 
   // ---- Tuner
   // While active, the output is muted (silent tuning) and recent input is kept for analysis.
@@ -203,6 +210,10 @@ private:
   std::atomic<bool> mCalibrate{false};
   std::atomic<float> mInterfaceDbu{12.0f};
   Recorder mRecorder;
+  Rhythm mRhythm;
+  Looper mLooper;
+  TrackPlayer mTrack;
+  std::vector<float> mMixL, mMixR; // audio-thread scratch for the final mix
   std::vector<float> mGateGains;
   bool mGateWasOn = false;
   bool mEqWasOn = false;

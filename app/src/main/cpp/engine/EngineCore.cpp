@@ -70,6 +70,11 @@ EngineCore::EngineCore(double sampleRate)
 , mGateGains(kMaxFrames, 1.0f)
 , mTunerRing(new std::atomic<float>[kTunerRing]())
 , mRecorder(sampleRate)
+, mRhythm(sampleRate)
+, mLooper(sampleRate)
+, mTrack(sampleRate)
+, mMixL(kMaxFrames, 0.0f)
+, mMixR(kMaxFrames, 0.0f)
 {
   mGate.prepare(sampleRate);
 }
@@ -412,24 +417,47 @@ void EngineCore::process(const float* in, float* outLeft, float* outRight, int n
     if (!eqDone)
       runEq(bufL, bufR, true, n);
 
+    // The rig's sound, at output volume.
     const float outStep = (outTarget - mOutputGain) / static_cast<float>(n);
     for (int i = 0; i < n; ++i)
     {
       mOutputGain += outStep;
       float l = bufL[i] * mOutputGain;
       float r = bufR[i] * mOutputGain;
-      if (!std::isfinite(l))
-        l = 0.0f;
-      if (!std::isfinite(r))
-        r = 0.0f;
-      l = std::clamp(l, -1.0f, 1.0f); // protect ears and speakers
-      r = std::clamp(r, -1.0f, 1.0f);
-      outPeak = std::max(outPeak, std::max(std::fabs(l), std::fabs(r)));
-      outLeft[offset + i] = l;
-      outRight[offset + i] = r;
+      bufL[i] = std::isfinite(l) ? l : 0.0f;
+      bufR[i] = std::isfinite(r) ? r : 0.0f;
     }
     mOutputGain = outTarget;
+
+    // Practice tools: looper (records the rig), backing track, drums.
+    float* mixL = mMixL.data();
+    float* mixR = mMixR.data();
+    std::copy_n(bufL, n, mixL);
+    std::copy_n(bufR, n, mixR);
+    mLooper.setBarSamples(mRhythm.playing() ? mRhythm.barSamples() : 0.0);
+    mLooper.process(bufL, bufR, mixL, mixR, n);
+    mTrack.render(mixL, mixR, n);
+    const bool clickOnly = mRhythm.style() == RhythmStyle::Click;
+    if (!clickOnly)
+      mRhythm.render(mixL, mixR, n); // drum loops are part of recordings
+
+    for (int i = 0; i < n; ++i)
+    {
+      outLeft[offset + i] = std::clamp(mixL[i], -1.0f, 1.0f); // protect ears and speakers
+      outRight[offset + i] = std::clamp(mixR[i], -1.0f, 1.0f);
+    }
     mRecorder.push(outLeft + offset, outRight + offset, n);
+
+    if (clickOnly && mRhythm.render(outLeft + offset, outRight + offset, n)) // the click isn't recorded
+    {
+      for (int i = 0; i < n; ++i)
+      {
+        outLeft[offset + i] = std::clamp(outLeft[offset + i], -1.0f, 1.0f);
+        outRight[offset + i] = std::clamp(outRight[offset + i], -1.0f, 1.0f);
+      }
+    }
+    for (int i = 0; i < n; ++i)
+      outPeak = std::max(outPeak, std::max(std::fabs(outLeft[offset + i]), std::fabs(outRight[offset + i])));
   }
 
   updateMax(mInputPeak, inPeak);
