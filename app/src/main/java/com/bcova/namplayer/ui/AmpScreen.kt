@@ -80,6 +80,7 @@ fun PlayerScreen(
     onTuner: () -> Unit,
     onSettings: () -> Unit,
     onLive: () -> Unit,
+    onPractice: () -> Unit,
     signedIn: Boolean,
     onSignOut: () -> Unit,
 ) {
@@ -154,6 +155,9 @@ fun PlayerScreen(
                 else ButtonDefaults.outlinedButtonColors(),
             ) { Text(if (rec != null) "● Recording ${formatTime(rec)} · Stop" else "● Record") }
             OutlinedButton(onClick = onLive, modifier = Modifier.height(48.dp)) { Text("Live mode") }
+        }
+        OutlinedButton(onClick = onPractice, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+            Text("Practice: metronome · drums · looper · backing tracks")
         }
         vm.lastRecording?.let { RecordingBanner(it, vm::dismissRecording) }
         if (vm.restoring) {

@@ -72,6 +72,8 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var eqBeforeCab by mutableStateOf(settings.eqBeforeCab)
         private set
+    var sharedAudio by mutableStateOf(settings.sharedAudio)
+        private set
     var inputDevice by mutableStateOf(settings.inputDevice)
         private set
     var outputDevice by mutableStateOf(settings.outputDevice)
@@ -153,6 +155,7 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
         NativeAudio.setBufferBursts(bufferBursts)
         NativeAudio.setInputCalibration(calibrate, interfaceDbu)
         NativeAudio.setEqBeforeCab(eqBeforeCab)
+        NativeAudio.setSharedMode(sharedAudio)
         viewModelScope.launch { restoreLastSession() }
         viewModelScope.launch(Dispatchers.IO) { cleanDownloadCache() }
         listenToPedals()
@@ -172,6 +175,12 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
         settings.calibrate = enabled
         settings.interfaceDbu = dbu
         NativeAudio.setInputCalibration(enabled, dbu)
+    }
+
+    fun updateSharedAudio(shared: Boolean) {
+        sharedAudio = shared
+        settings.sharedAudio = shared
+        NativeAudio.setSharedMode(shared)
     }
 
     fun updateEqBeforeCab(before: Boolean) {
@@ -566,7 +575,9 @@ class AmpViewModel(app: Application) : AndroidViewModel(app) {
             PedalAction.PREV_PRESET -> stepPreset(-1)
             PedalAction.RECORD -> toggleRecording()
             PedalAction.GATE -> toggleGate(!gateEnabled)
-            PedalAction.TUNER -> Unit // handled by the screen (AppRoot)
+            PedalAction.TUNER, PedalAction.LOOPER, PedalAction.LOOPER_STOP, PedalAction.LOOPER_UNDO,
+            PedalAction.METRONOME, PedalAction.TRACK,
+            -> Unit // handled by the screen (AppRoot) / PracticeViewModel
             else -> {
                 val index = action.ordinal - PedalAction.BLOCK_1.ordinal
                 blocks.getOrNull(index)?.takeIf { !it.isEmpty }?.let { setEnabled(it, !it.enabled) }

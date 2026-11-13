@@ -21,7 +21,12 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.bcova.namplayer.rig.LoadedTone
 
 @Composable
-fun AppRoot(amp: AmpViewModel = viewModel(), t3k: T3kViewModel = viewModel()) {
+fun AppRoot(
+    amp: AmpViewModel = viewModel(),
+    t3k: T3kViewModel = viewModel(),
+    // Created up front so looper/metronome footswitches work from any screen.
+    practice: PracticeViewModel = viewModel(),
+) {
     BackHandler(enabled = t3k.backStack.size > 1) { t3k.back() }
 
     // Footswitch "Tuner on/off": open or close the tuner from any screen.
@@ -44,6 +49,7 @@ fun AppRoot(amp: AmpViewModel = viewModel(), t3k: T3kViewModel = viewModel()) {
                     onTuner = { t3k.push(Screen.Tuner) },
                     onSettings = { t3k.push(Screen.Settings) },
                     onLive = { t3k.push(Screen.Live) },
+                    onPractice = { t3k.push(Screen.Practice) },
                     signedIn = t3k.signedIn,
                     onSignOut = t3k::signOut,
                 )
@@ -52,6 +58,7 @@ fun AppRoot(amp: AmpViewModel = viewModel(), t3k: T3kViewModel = viewModel()) {
                 is Screen.Search -> SearchScreen(s.target, t3k)
                 Screen.Tuner -> TunerScreen(amp, onBack = { t3k.back() })
                 Screen.Settings -> SettingsScreen(amp, onBack = { t3k.back() })
+                Screen.Practice -> PracticeScreen(amp, onBack = { t3k.back() }, vm = practice)
                 Screen.Live -> LiveScreen(amp, onTuner = { t3k.push(Screen.Tuner) }, onBack = { t3k.back() })
                 is Screen.ToneDetail -> ToneDetailScreen(t3k, onInstall = {
                     t3k.installSelected { file, tone, model, target ->

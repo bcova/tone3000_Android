@@ -34,6 +34,8 @@ public:
   void setDevices(int inputId, int outputId);
   // Output buffer size in bursts: 1 = lowest latency (may crackle), 2 = default, 4 = safest.
   void setBufferBursts(int bursts);
+  // Shared mode lets other apps (YouTube, Spotify…) play at the same time, at a small latency cost.
+  void setSharedMode(bool shared);
   // Estimated time from guitar in to headphones out, in ms (-1 if unknown).
   int roundTripLatencyMs() const;
 
@@ -63,6 +65,7 @@ private:
   int mInputDeviceId = 0;
   int mOutputDeviceId = 0;
   int mBufferBursts = 2;
+  bool mShared = false;
   void restartLocked();
   int mOutChannels = 2; // set before streams start; read by the audio thread
   mutable std::mutex mLock;

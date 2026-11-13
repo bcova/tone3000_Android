@@ -68,6 +68,7 @@ fun SettingsScreen(vm: AmpViewModel, onBack: () -> Unit) {
         ) {
             AudioSection(vm)
             LatencySection(vm)
+            ShareSection(vm)
             CalibrationSection(vm)
             EqSection(vm)
             PedalSection()
@@ -172,6 +173,24 @@ private fun LatencySection(vm: AmpViewModel) {
             },
             style = MaterialTheme.typography.bodyMedium,
         )
+    }
+}
+
+// ---- Other apps
+
+@Composable
+private fun ShareSection(vm: AmpViewModel) {
+    SettingsCard("Play along with other apps") {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Mix with YouTube, Spotify, etc.")
+                Hint(
+                    "Turn on to hear other apps together with your guitar, e.g. YouTube in split screen or " +
+                        "pop-up view. Adds a little delay. Off = lowest latency, other apps may be silent.",
+                )
+            }
+            Switch(checked = vm.sharedAudio, onCheckedChange = vm::updateSharedAudio)
+        }
     }
 }
 

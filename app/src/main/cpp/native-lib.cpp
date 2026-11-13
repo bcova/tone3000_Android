@@ -154,6 +154,96 @@ JNIEXPORT jdouble JNICALL JNI_FN(recordingSeconds)(JNIEnv*, jobject)
   return engine().core().recorder().recording() ? engine().core().recorder().seconds() : -1.0;
 }
 
+JNIEXPORT void JNICALL JNI_FN(setSharedMode)(JNIEnv*, jobject, jboolean shared)
+{
+  engine().setSharedMode(shared == JNI_TRUE);
+}
+
+// ---- Metronome / drums
+JNIEXPORT void JNICALL JNI_FN(setRhythm)(JNIEnv*, jobject, jboolean playing, jfloat bpm, jint style, jint beatsPerBar,
+                                         jfloat volume)
+{
+  auto& r = engine().core().rhythm();
+  r.setBpm(bpm);
+  r.setStyle(static_cast<ampengine::RhythmStyle>(style));
+  r.setBeatsPerBar(beatsPerBar);
+  r.setVolume(volume);
+  r.setPlaying(playing == JNI_TRUE);
+}
+
+JNIEXPORT jint JNICALL JNI_FN(rhythmBeat)(JNIEnv*, jobject)
+{
+  return engine().core().rhythm().currentBeat();
+}
+
+// ---- Looper
+JNIEXPORT void JNICALL JNI_FN(looperPrepare)(JNIEnv*, jobject)
+{
+  engine().core().looper().prepare();
+}
+
+JNIEXPORT void JNICALL JNI_FN(looperCommand)(JNIEnv*, jobject, jint command)
+{
+  engine().core().looper().command(static_cast<ampengine::Looper::Command>(command));
+}
+
+JNIEXPORT void JNICALL JNI_FN(looperVolume)(JNIEnv*, jobject, jfloat volume)
+{
+  engine().core().looper().setVolume(volume);
+}
+
+// Returns [state, lengthSeconds, positionSeconds, layers, canUndo(0/1)].
+JNIEXPORT jdoubleArray JNICALL JNI_FN(looperStatus)(JNIEnv* env, jobject)
+{
+  auto& l = engine().core().looper();
+  const jdouble v[5] = {static_cast<double>(l.state()), l.lengthSeconds(), l.positionSeconds(),
+                        static_cast<double>(l.layers()), l.canUndo() ? 1.0 : 0.0};
+  jdoubleArray out = env->NewDoubleArray(5);
+  env->SetDoubleArrayRegion(out, 0, 5, v);
+  return out;
+}
+
+// ---- Backing track
+JNIEXPORT jstring JNICALL JNI_FN(trackOpen)(JNIEnv* env, jobject, jstring path)
+{
+  return errorOrNull(env, engine().core().track().open(toStdString(env, path)));
+}
+
+JNIEXPORT void JNICALL JNI_FN(trackClose)(JNIEnv*, jobject)
+{
+  engine().core().track().close();
+}
+
+JNIEXPORT void JNICALL JNI_FN(trackPlay)(JNIEnv*, jobject, jboolean playing)
+{
+  engine().core().track().setPlaying(playing == JNI_TRUE);
+}
+
+JNIEXPORT void JNICALL JNI_FN(trackSeek)(JNIEnv*, jobject, jdouble seconds)
+{
+  engine().core().track().seek(seconds);
+}
+
+JNIEXPORT void JNICALL JNI_FN(trackLoop)(JNIEnv*, jobject, jdouble a, jdouble b)
+{
+  engine().core().track().setLoop(a, b);
+}
+
+JNIEXPORT void JNICALL JNI_FN(trackVolume)(JNIEnv*, jobject, jfloat volume)
+{
+  engine().core().track().setVolume(volume);
+}
+
+// Returns [playing(0/1), positionSeconds, durationSeconds].
+JNIEXPORT jdoubleArray JNICALL JNI_FN(trackStatus)(JNIEnv* env, jobject)
+{
+  auto& t = engine().core().track();
+  const jdouble v[3] = {t.playing() ? 1.0 : 0.0, t.positionSeconds(), t.durationSeconds()};
+  jdoubleArray out = env->NewDoubleArray(3);
+  env->SetDoubleArrayRegion(out, 0, 3, v);
+  return out;
+}
+
 JNIEXPORT void JNICALL JNI_FN(setTunerActive)(JNIEnv*, jobject, jboolean active)
 {
   engine().core().setTunerActive(active == JNI_TRUE);

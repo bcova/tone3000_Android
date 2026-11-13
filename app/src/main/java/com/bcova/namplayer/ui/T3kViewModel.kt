@@ -41,6 +41,7 @@ sealed interface Screen {
     data object Tuner : Screen
     data object Settings : Screen
     data object Live : Screen
+    data object Practice : Screen
 }
 
 /** Which list the tag/make picker is showing. */

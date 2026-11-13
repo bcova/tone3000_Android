@@ -52,6 +52,33 @@ object NativeAudio {
     /** Seconds recorded so far, or -1 when not recording. */
     external fun recordingSeconds(): Double
 
+    /** Exclusive (lowest latency) vs shared (other apps like YouTube can play too). */
+    external fun setSharedMode(shared: Boolean)
+
+    // ---- Practice tools
+    /** style: 0 click, 1 rock, 2 funk, 3 shuffle, 4 half-time, 5 ballad, 6 metal. */
+    external fun setRhythm(playing: Boolean, bpm: Float, style: Int, beatsPerBar: Int, volume: Float)
+    /** Current beat (0-based), -1 when stopped. */
+    external fun rhythmBeat(): Int
+
+    external fun looperPrepare()
+    /** 1 press, 2 stop/play, 3 undo, 4 clear. */
+    external fun looperCommand(command: Int)
+    external fun looperVolume(volume: Float)
+    /** [state, length s, position s, layers, canUndo]. state: 0 empty, 1 rec, 2 play, 3 overdub, 4 stopped. */
+    external fun looperStatus(): DoubleArray
+
+    /** Opens a 48 kHz stereo 16-bit PCM file made by TrackLibrary. */
+    external fun trackOpen(path: String): String?
+    external fun trackClose()
+    external fun trackPlay(playing: Boolean)
+    external fun trackSeek(seconds: Double)
+    /** Loop between a and b seconds; b <= a turns it off. */
+    external fun trackLoop(a: Double, b: Double)
+    external fun trackVolume(volume: Float)
+    /** [playing, position s, duration s]. */
+    external fun trackStatus(): DoubleArray
+
     /** Tuner mode: mutes the output and analyzes the input. */
     external fun setTunerActive(active: Boolean)
     /** [hz, clarity]. hz = 0 when there's no clear note. Call off the main thread. */

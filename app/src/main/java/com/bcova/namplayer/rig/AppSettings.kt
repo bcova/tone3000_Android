@@ -23,6 +23,11 @@ enum class PedalAction(val label: String) {
     BLOCK_5("Block 5 on/off"),
     BLOCK_6("Block 6 on/off"),
     GATE("Noise gate on/off"),
+    LOOPER("Looper: record / play / overdub"),
+    LOOPER_STOP("Looper: stop / play"),
+    LOOPER_UNDO("Looper: undo"),
+    METRONOME("Metronome / drums on/off"),
+    TRACK("Backing track play/pause"),
 }
 
 /**
@@ -56,6 +61,11 @@ class AppSettings(context: Context) {
     var eqBeforeCab: Boolean
         get() = prefs.getBoolean("eq_before_cab", false)
         set(v) = prefs.edit { putBoolean("eq_before_cab", v) }
+
+    /** Let other apps (YouTube, Spotify…) play at the same time. */
+    var sharedAudio: Boolean
+        get() = prefs.getBoolean("shared_audio", false)
+        set(v) = prefs.edit { putBoolean("shared_audio", v) }
 
     var askedNotifications: Boolean
         get() = prefs.getBoolean("asked_notifications", false)

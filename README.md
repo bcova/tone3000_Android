@@ -25,6 +25,17 @@ the app's private storage, so presets work offline. Copies that nothing uses are
 **Record** saves what you hear as a stereo WAV in **Music/Ampfield**, with a Share button.
 **Live mode** has big buttons: previous/next preset, a preset grid, block on/off tiles, tuner, record.
 
+**Practice** (button on the player):
+- **Metronome & drums:** BPM slider, ± buttons, tap tempo, click with 1–12 beats per bar, or drum grooves
+  (rock, funk, shuffle, half-time, ballad, metal). All drum sounds are synthesized by the app.
+- **Looper:** one big button: Record → Play → Overdub → Play…, plus Stop, Undo (last layer) and Clear. Up to 60 s.
+  With the metronome on, loops snap to whole bars.
+- **Backing tracks:** add MP3/M4A/WAV/FLAC/OGG songs from your phone (converted once and kept in the app).
+  Play/pause, seek, ±10 s, volume, and an A–B loop to repeat a section.
+- Looper, backing track and drums are included in recordings; the plain metronome click isn't.
+- **Jamming with YouTube:** turn on Settings → *Play along with other apps*, then use YouTube in split screen
+  or pop-up view. Ampfield doesn't pull audio out of YouTube; that's against YouTube's terms.
+
 **Background playing:** while audio is on, a "now playing" notification keeps Ampfield running when you
 switch apps or lock the screen.
 
@@ -121,6 +132,9 @@ Never commit the key: `*.jks`, `*.keystore` and `keystore.properties` are alread
 | Path | What it does |
 |---|---|
 | `app/src/main/cpp/engine/Recorder.*` | Lock-free recording to WAV (audio thread to writer thread). |
+| `app/src/main/cpp/engine/Rhythm.h` | Metronome and synthesized drum grooves. |
+| `app/src/main/cpp/engine/Looper.h` | Looper with overdub and glitch-free undo. |
+| `app/src/main/cpp/engine/TrackPlayer.*` | Streams backing tracks from storage (seek, A-B loop). |
 | `app/src/main/cpp/engine/Tuner.h` | YIN pitch detection for the tuner. |
 | `app/src/main/cpp/engine/Effects.h` | Noise gate and bass/mid/treble EQ (NAM-plugin curves). |
 | `app/src/main/cpp/engine/EngineCore.*` | The signal chain: gains, NAM model, IR, meters. Plain C++, so it can be tested on a computer. |

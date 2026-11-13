@@ -104,6 +104,15 @@ void AudioEngine::setDevices(int inputId, int outputId)
   restartLocked();
 }
 
+void AudioEngine::setSharedMode(bool shared)
+{
+  std::lock_guard<std::mutex> lock(mLock);
+  if (shared == mShared)
+    return;
+  mShared = shared;
+  restartLocked();
+}
+
 void AudioEngine::setBufferBursts(int bursts)
 {
   std::lock_guard<std::mutex> lock(mLock);
@@ -162,7 +171,7 @@ oboe::Result AudioEngine::openStreams()
   oboe::AudioStreamBuilder outBuilder;
   outBuilder.setDirection(oboe::Direction::Output)
     ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
-    ->setSharingMode(oboe::SharingMode::Exclusive)
+    ->setSharingMode(mShared ? oboe::SharingMode::Shared : oboe::SharingMode::Exclusive)
     ->setFormat(oboe::AudioFormat::Float)
     ->setChannelCount(oboe::ChannelCount::Stereo)
     ->setSampleRate(kSampleRate)
@@ -180,7 +189,7 @@ oboe::Result AudioEngine::openStreams()
   oboe::AudioStreamBuilder inBuilder;
   inBuilder.setDirection(oboe::Direction::Input)
     ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
-    ->setSharingMode(oboe::SharingMode::Exclusive)
+    ->setSharingMode(mShared ? oboe::SharingMode::Shared : oboe::SharingMode::Exclusive)
     ->setFormat(oboe::AudioFormat::Float)
     ->setChannelCount(oboe::ChannelCount::Mono)
     ->setSampleRate(mOutput->getSampleRate())
